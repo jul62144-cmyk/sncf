@@ -1,19 +1,17 @@
-# Trajets SNCF Hauts-de-France — V2.2
+# Trajets SNCF Hauts-de-France — V2.3
 
-Fonctions :
-- Itinéraire train + cars TER directs (fonction V2.1)
-- Tableau des départs d'une gare
-- Tableau des arrivées d'une gare
-- Heure, numéro/libellé, destination/origine
-- Retard affiché lorsque l'API SNCF renvoie une heure réelle différente de l'heure de base
-- PWA installable, favoris et interface mobile
+Nouveautés :
+- cars TER ajoutés aux tableaux Départs et Arrivées ;
+- fusion chronologique trains + cars ;
+- affichage de la voie/quai lorsqu'une source la fournit ;
+- conservation de l'itinéraire Train + Car de la V2.2 ;
+- PWA et favoris conservés.
 
-## Installation
-1. Copier `.env.example` en `.env`.
-2. Remettre le token SNCF dans `.env`.
+Important : si l'API/GTFS ne fournit aucune voie, l'application n'en invente pas.
+
+Installation :
+1. Copier .env.example en .env
+2. Ajouter le token SNCF
 3. npm install
 4. npm start
 5. Ouvrir http://localhost:3000
-
-Les tableaux Départs/Arrivées SNCF utilisent l'API SNCF.
-Les cars TER de la recherche d'itinéraire utilisent le GTFS officiel Hauts-de-France.

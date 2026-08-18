@@ -349,27 +349,49 @@ $("board-search-btn").addEventListener("click", async () => {
       stopArea: boardStation.id,
       datetime: boardApiDatetime()
     });
-    const r = await fetch(`/api/${boardMode}?${qs}`);
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.error || "Erreur API SNCF");
+    const busQs = new URLSearchParams({
+      stationName: boardStation.name,
+      date: $("board-date").value,
+      time: $("board-time").value,
+      mode: boardMode
+    });
 
-    $("board-status").textContent = `${data.length} circulation(s) affichée(s).`;
+    const [trainResp, busResp] = await Promise.all([
+      fetch(`/api/${boardMode}?${qs}`),
+      fetch(`/api/bus-board?${busQs}`)
+    ]);
+    const trains = await trainResp.json();
+    const buses = await busResp.json();
+
+    if (!trainResp.ok) throw new Error(trains.error || "Erreur API SNCF");
+
+    const data = [
+      ...(Array.isArray(trains) ? trains : []),
+      ...(Array.isArray(buses) ? buses : [])
+    ].sort((a,b) => (a.datetime || "").localeCompare(b.datetime || ""));
+
+    const nbBus = data.filter(x => x.transportType === "bus").length;
+    $("board-status").textContent =
+      `${data.length} circulation(s) affichée(s)${nbBus ? `, dont ${nbBus} car(s) TER` : ""}.`;
 
     $("board-results").innerHTML = data.map(item => {
       const delay = delayMinutes(item.datetime, item.baseDatetime);
       const target = boardMode === "departures"
         ? (item.direction || item.headsign || "Destination non indiquée")
-        : (item.headsign || item.direction || "Origine non indiquée");
+        : (item.origin || item.headsign || item.direction || "Origine non indiquée");
+
+      const badge = item.transportType === "bus" ? "🚌 Car TER" : "🚆 Train";
+      const platform = item.platform ? ` • Voie ${escapeHtml(item.platform)}` : "";
 
       return `<article class="journey">
         <div class="board-row">
           <div class="board-time">${fmt(item.datetime)}</div>
           <div class="board-main">
             <div class="board-destination">${escapeHtml(target)}</div>
-            <div class="board-train">${escapeHtml([item.commercialMode, item.label].filter(Boolean).join(" "))}</div>
+            <div class="board-train">${escapeHtml([item.commercialMode, item.label].filter(Boolean).join(" "))}${platform}</div>
             ${delay > 0 ? `<div class="delay">+${delay} min</div>` : ""}
           </div>
-          <div class="board-badge">🚆 Train</div>
+          <div class="board-badge">${badge}</div>
         </div>
       </article>`;
     }).join("");

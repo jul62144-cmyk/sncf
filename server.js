@@ -163,7 +163,8 @@ app.get("/api/departures", async (req, res) => {
       label: d.display_informations?.label || "",
       commercialMode: d.display_informations?.commercial_mode || "",
       network: d.display_informations?.network || "",
-      status: d.stop_date_time?.data_freshness || null
+      status: d.stop_date_time?.data_freshness || null,
+      platform: d.stop_point?.platform_code || d.stop_point?.platform || d.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] || null
     }));
     res.json(items);
   } catch (e) {
@@ -193,7 +194,8 @@ app.get("/api/arrivals", async (req, res) => {
       label: a.display_informations?.label || "",
       commercialMode: a.display_informations?.commercial_mode || "",
       network: a.display_informations?.network || "",
-      status: a.stop_date_time?.data_freshness || null
+      status: a.stop_date_time?.data_freshness || null,
+      platform: a.stop_point?.platform_code || a.stop_point?.platform || a.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] || null
     }));
     res.json(items);
   } catch (e) {
@@ -384,6 +386,72 @@ app.get("/api/bus-journeys", async (req, res) => {
 
     found.sort((a,b) => a.departure.localeCompare(b.departure));
     res.json(found.slice(0, 8));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+
+function gtfsDateTimeForBoard(dateStr, timeStr) {
+  return secsToSncfDateTime(dateStr, gtfsSecs(timeStr));
+}
+
+function matchCarStops(stops, stationName) {
+  const n = norm(stationName);
+  return stops.filter(s =>
+    /OCECar/i.test(s.stop_id) &&
+    (norm(s.stop_name) === n || norm(s.stop_name).includes(n) || n.includes(norm(s.stop_name)))
+  );
+}
+
+app.get("/api/bus-board", async (req, res) => {
+  try {
+    const stationName = String(req.query.stationName || "").trim();
+    const date = String(req.query.date || "").trim();
+    const time = String(req.query.time || "00:00").trim();
+    const mode = String(req.query.mode || "departures");
+    if (!stationName || !date) return res.status(400).json({ error: "Gare et date obligatoires." });
+
+    const gtfs = await loadGtfs();
+    const carStops = matchCarStops(gtfs.stops, stationName);
+    const stopIds = new Set(carStops.map(s => s.stop_id));
+    const minSecs = gtfsSecs(time + ":00");
+    const out = [];
+
+    for (const trip of gtfs.trips) {
+      if (!serviceRuns(gtfs, trip.service_id, date)) continue;
+      const route = gtfs.routeById.get(trip.route_id);
+      const times = gtfs.timesByTrip.get(trip.trip_id) || [];
+      const idx = times.findIndex(st => stopIds.has(st.stop_id));
+      if (idx < 0) continue;
+
+      const st = times[idx];
+      const eventTime = mode === "arrivals" ? st.arrival_time : st.departure_time;
+      const eventSecs = gtfsSecs(eventTime);
+      if (eventSecs < minSecs - 60) continue;
+
+      const first = times[0], last = times[times.length - 1];
+      const origin = gtfs.stopById.get(first.stop_id)?.stop_name || "";
+      const destination = gtfs.stopById.get(last.stop_id)?.stop_name || "";
+
+      out.push({
+        type: mode === "arrivals" ? "arrival" : "departure",
+        transportType: "bus",
+        datetime: gtfsDateTimeForBoard(date, eventTime),
+        baseDatetime: gtfsDateTimeForBoard(date, eventTime),
+        origin,
+        direction: destination,
+        headsign: trip.trip_headsign || destination,
+        label: route?.route_short_name || route?.route_long_name || trip.trip_short_name || "",
+        commercialMode: "Car TER",
+        network: "TER Hauts-de-France",
+        status: "base_schedule",
+        platform: st.platform_code || null
+      });
+    }
+
+    out.sort((a,b) => a.datetime.localeCompare(b.datetime));
+    res.json(out.slice(0, 30));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

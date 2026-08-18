@@ -1,4 +1,4 @@
-const CACHE = "trajets-hdf-v2.2";
+const CACHE = "trajets-hdf-v2.3";
 const ASSETS = [
   "/",
   "/index.html",
