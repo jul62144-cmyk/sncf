@@ -1,38 +1,49 @@
-# Trajets SNCF Hauts-de-France
+# Trajets SNCF Hauts-de-France — Version 2
 
-Petite application web pour rechercher un trajet SNCF entre deux gares, avec horaires, durée et correspondances.
+Cette version ajoute :
+- installation comme application PWA sur smartphone/tablette ;
+- icône Trajets HDF ;
+- interface mobile améliorée ;
+- gares favorites mémorisées ;
+- accès depuis les appareils du réseau local.
 
-## Prérequis
-- Node.js 18 ou plus récent
-- Un token de l'API SNCF
+## Installation sur le PC
 
-## Installation sous Windows
-
-1. Décompresse le dossier.
-2. Ouvre un terminal dans le dossier `trajet-sncf-hdf`.
+1. Décompresse le ZIP.
+2. Ouvre un terminal dans le dossier `trajet-sncf-hdf-v2`.
 3. Lance :
    npm install
 4. Copie `.env.example` et renomme la copie en `.env`.
-5. Dans `.env`, remplace :
-   SNCF_API_TOKEN=colle_ton_token_api_sncf_ici
-   par ton token SNCF.
+5. Mets ton token SNCF dans `.env`.
 6. Lance :
    npm start
 7. Ouvre :
    http://localhost:3000
 
-## Utilisation
-- Commence à taper une gare, par exemple `Arras`.
-- Clique obligatoirement sur la gare proposée.
-- Choisis la gare d'arrivée.
-- Sélectionne date et heure.
-- Clique sur `Rechercher les trains`.
-- Clique sur un résultat pour afficher le détail.
+## Depuis smartphone ou tablette sur le même Wi-Fi
 
-## Architecture
-- `server.js` : petit serveur Node/Express et passerelle vers l'API SNCF.
-- `public/index.html` : interface.
-- `public/app.js` : recherche de gares et affichage des itinéraires.
-- `public/style.css` : mise en page.
+Sur le PC, lance :
 
-Le token API reste côté serveur et n'est donc pas exposé dans le navigateur.
+   ipconfig
+
+Repère l'adresse IPv4 du PC, par exemple `192.168.1.25`.
+
+Sur le smartphone/tablette, ouvre alors :
+
+   http://192.168.1.25:3000
+
+## Installation sur l'écran d'accueil
+
+### Android / Chrome
+Menu ⋮ → Ajouter à l'écran d'accueil / Installer l'application.
+
+### iPhone / iPad / Safari
+Partager → Sur l'écran d'accueil → Ajouter.
+
+## Important
+
+Pour une installation PWA complète, les navigateurs modernes exigent généralement HTTPS,
+sauf en accès local sur `localhost`. Sur un smartphone accédant au PC via une IP locale en HTTP,
+l'application fonctionne dans le navigateur mais l'installation PWA peut être limitée selon le navigateur.
+
+Pour que l'application soit installable partout et fonctionne même PC éteint, il faudra l'héberger en HTTPS.

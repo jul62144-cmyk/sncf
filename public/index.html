@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#101828">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Trajets HDF">
+  <title>Trajets HDF</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <div class="badge">TER • HAUTS-DE-FRANCE</div>
+      <h1>Trajets HDF</h1>
+      <p>Planifie rapidement un trajet entre deux gares.</p>
+    </header>
+
+    <section class="card search-card">
+      <div class="field autocomplete">
+        <label for="from">Départ</label>
+        <input id="from" autocomplete="off" placeholder="Ex. Arras">
+        <button id="fav-from" class="fav-btn" type="button" title="Ajouter le départ aux favoris">☆</button>
+        <div id="from-list" class="suggestions"></div>
+      </div>
+
+      <button id="swap" class="swap" title="Inverser départ et arrivée">⇅</button>
+
+      <div class="field autocomplete">
+        <label for="to">Arrivée</label>
+        <input id="to" autocomplete="off" placeholder="Ex. Lille Flandres">
+        <button id="fav-to" class="fav-btn" type="button" title="Ajouter l'arrivée aux favoris">☆</button>
+        <div id="to-list" class="suggestions"></div>
+      </div>
+
+      <div id="favorites" class="favorites"></div>
+
+      <div class="date-row">
+        <div class="field">
+          <label for="date">Date</label>
+          <input id="date" type="date">
+        </div>
+        <div class="field">
+          <label for="time">Heure de départ</label>
+          <input id="time" type="time">
+        </div>
+      </div>
+
+      <button id="search" class="primary">Rechercher les trains</button>
+      <p id="status" class="status"></p>
+    </section>
+
+    <section id="results" class="results"></section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

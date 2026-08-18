@@ -20,6 +20,7 @@ async function sncfGet(endpoint, params = {}) {
     err.status = 500;
     throw err;
   }
+
   const url = new URL(`https://api.sncf.com/v1/coverage/sncf${endpoint}`);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") url.searchParams.append(k, v);
@@ -44,7 +45,6 @@ function isHautsDeFrance(place) {
     ...regions.flatMap(r => [r.name, r.label, r.zip_code])
   ].filter(Boolean).join(" ").toLowerCase();
 
-  // Filtre principal par région, avec départements en secours.
   return text.includes("hauts-de-france") ||
          /\b(02|59|60|62|80)\b/.test(text);
 }
@@ -53,6 +53,7 @@ app.get("/api/stations", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
     if (q.length < 2) return res.json([]);
+
     const data = await sncfGet("/places", {
       q,
       "type[]": "stop_area",
@@ -68,8 +69,6 @@ app.get("/api/stations", async (req, res) => {
         label: p.stop_area.label || p.stop_area.name
       }));
 
-    // Si l'API ne remonte pas le nom de région, garder les résultats SNCF
-    // lorsque le filtre régional a tout éliminé, pour ne pas bloquer l'utilisateur.
     if (!places.length) {
       const fallback = (data.places || [])
         .filter(p => p.embedded_type === "stop_area" && p.stop_area)
@@ -81,6 +80,7 @@ app.get("/api/stations", async (req, res) => {
         }));
       return res.json(fallback);
     }
+
     res.json(places.slice(0, 10));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
@@ -90,7 +90,9 @@ app.get("/api/stations", async (req, res) => {
 app.get("/api/journeys", async (req, res) => {
   try {
     const { from, to, datetime } = req.query;
-    if (!from || !to) return res.status(400).json({ error: "Départ et arrivée obligatoires." });
+    if (!from || !to) {
+      return res.status(400).json({ error: "Départ et arrivée obligatoires." });
+    }
 
     const data = await sncfGet("/journeys", {
       from,
@@ -134,6 +136,10 @@ app.get("/api/status", (req, res) => {
   res.json({ tokenConfigured: Boolean(TOKEN) });
 });
 
-app.listen(PORT, () => {
-  console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`);
+  });
+}
+
+module.exports = app;

@@ -1,0 +1,21 @@
+{
+  "name": "Trajets SNCF Hauts-de-France",
+  "short_name": "Trajets HDF",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f2f4f7",
+  "theme_color": "#101828",
+  "description": "Planificateur de trajets SNCF pour les gares des Hauts-de-France",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
