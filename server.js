@@ -16,16 +16,14 @@ function sncfHeaders() {
 
 async function sncfGet(endpoint, params = {}) {
   if (!TOKEN) {
-    const err = new Error("Token SNCF manquant. Copie .env.example vers .env et ajoute SNCF_API_TOKEN.");
+    const err = new Error("Token SNCF manquant.");
     err.status = 500;
     throw err;
   }
-
   const url = new URL(`https://api.sncf.com/v1/coverage/sncf${endpoint}`);
   Object.entries(params).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== "") url.searchParams.append(k, v);
   });
-
   const r = await fetch(url, { headers: sncfHeaders() });
   const body = await r.text();
   if (!r.ok) {
@@ -39,49 +37,24 @@ async function sncfGet(endpoint, params = {}) {
 function isHautsDeFrance(place) {
   const sa = place.stop_area || place;
   const regions = sa.administrative_regions || [];
-  const text = [
-    sa.name,
-    sa.label,
-    ...regions.flatMap(r => [r.name, r.label, r.zip_code])
-  ].filter(Boolean).join(" ").toLowerCase();
-
-  return text.includes("hauts-de-france") ||
-         /\b(02|59|60|62|80)\b/.test(text);
+  const text = [sa.name, sa.label, ...regions.flatMap(r => [r.name, r.label, r.zip_code])]
+    .filter(Boolean).join(" ").toLowerCase();
+  return text.includes("hauts-de-france") || /\b(02|59|60|62|80)\b/.test(text);
 }
 
 app.get("/api/stations", async (req, res) => {
   try {
     const q = String(req.query.q || "").trim();
     if (q.length < 2) return res.json([]);
-
-    const data = await sncfGet("/places", {
-      q,
-      "type[]": "stop_area",
-      count: 20
-    });
-
-    const places = (data.places || [])
-      .filter(p => p.embedded_type === "stop_area" && p.stop_area)
-      .filter(isHautsDeFrance)
-      .map(p => ({
-        id: p.stop_area.id,
-        name: p.stop_area.name,
-        label: p.stop_area.label || p.stop_area.name
-      }));
-
-    if (!places.length) {
-      const fallback = (data.places || [])
-        .filter(p => p.embedded_type === "stop_area" && p.stop_area)
-        .slice(0, 8)
-        .map(p => ({
-          id: p.stop_area.id,
-          name: p.stop_area.name,
-          label: p.stop_area.label || p.stop_area.name
-        }));
-      return res.json(fallback);
-    }
-
-    res.json(places.slice(0, 10));
+    const data = await sncfGet("/places", { q, "type[]": "stop_area", count: 20 });
+    const all = (data.places || []).filter(p => p.embedded_type === "stop_area" && p.stop_area);
+    const filtered = all.filter(isHautsDeFrance);
+    const source = filtered.length ? filtered : all.slice(0, 8);
+    res.json(source.slice(0, 10).map(p => ({
+      id: p.stop_area.id,
+      name: p.stop_area.name,
+      label: p.stop_area.label || p.stop_area.name
+    })));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -90,20 +63,12 @@ app.get("/api/stations", async (req, res) => {
 app.get("/api/journeys", async (req, res) => {
   try {
     const { from, to, datetime } = req.query;
-    if (!from || !to) {
-      return res.status(400).json({ error: "Départ et arrivée obligatoires." });
-    }
-
+    if (!from || !to) return res.status(400).json({ error: "Départ et arrivée obligatoires." });
     const data = await sncfGet("/journeys", {
-      from,
-      to,
-      datetime,
-      datetime_represents: "departure",
-      count: 8,
+      from, to, datetime, datetime_represents: "departure", count: 8,
       "allowed_id[]": "physical_mode:Train"
     });
-
-    const journeys = (data.journeys || []).map(j => ({
+    res.json((data.journeys || []).map(j => ({
       departure: j.departure_date_time,
       arrival: j.arrival_date_time,
       duration: j.duration,
@@ -124,22 +89,57 @@ app.get("/api/journeys", async (req, res) => {
           headsign: s.display_informations.headsign
         } : null
       }))
-    }));
-
-    res.json(journeys);
+    })));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
 });
 
-app.get("/api/status", (req, res) => {
-  res.json({ tokenConfigured: Boolean(TOKEN) });
+app.get("/api/departures", async (req, res) => {
+  try {
+    const { station, datetime } = req.query;
+    if (!station) return res.status(400).json({ error: "Gare obligatoire." });
+    const endpoint = `/stop_areas/${encodeURIComponent(station)}/departures`;
+    const data = await sncfGet(endpoint, {
+      from_datetime: datetime,
+      data_freshness: "realtime",
+      count: 30,
+      depth: 2
+    });
+    const departures = (data.departures || []).map(d => {
+      const info = d.display_informations || {};
+      const sdt = d.stop_date_time || {};
+      const sp = d.stop_point || {};
+      const props = sp.properties || {};
+      const platform = sp.platform_code || props.platform_code || props.platform || sp.code || null;
+      const planned = sdt.base_departure_date_time || null;
+      const actual = sdt.departure_date_time || planned;
+      let delay = 0;
+      if (planned && actual) {
+        const parse = x => new Date(`${x.slice(0,4)}-${x.slice(4,6)}-${x.slice(6,8)}T${x.slice(9,11)}:${x.slice(11,13)}:${x.slice(13,15)}`);
+        delay = Math.max(0, Math.round((parse(actual) - parse(planned)) / 60000));
+      }
+      return {
+        departure: actual,
+        plannedDeparture: planned,
+        trainNumber: info.headsign || info.code || "",
+        mode: info.commercial_mode || "Train",
+        direction: info.direction || info.label || "",
+        platform,
+        stopPointName: sp.name || "",
+        realtime: sdt.data_freshness === "realtime",
+        delay
+      };
+    });
+    res.json(departures);
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
+  }
 });
 
-if (require.main === module) {
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`);
-  });
-}
+app.get("/api/status", (req, res) => res.json({ tokenConfigured: Boolean(TOKEN) }));
 
+if (require.main === module) {
+  app.listen(PORT, "0.0.0.0", () => console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`));
+}
 module.exports = app;
