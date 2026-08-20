@@ -140,14 +140,14 @@ function renderBoard(){
     const other=state.boardMode==="departures"
       ? (item.origin||"—")
       : (item.direction||item.headsign||"—");
-    const mode=item.commercialMode||item.network||(isBus?"Car TER":"Train");
+    const mode=item.isW?"W / acheminement":(item.commercialMode||item.network||(isBus?"Car TER":"Train"));
     const platform=item.platform
       ? `<span class="platform ${isBus?"bus":""} ${item.platformEstimated?"estimated":""}">${escapeHtml(item.platform)}</span>${item.tchoo?`<span class="platform-label">${item.platformSource==="persistent-history"?`historique ${Math.round(item.platformConfidence||0)}%${item.platformObservations?` · ${item.platformObservations}j`:""}`:(item.platformEstimated?`estimée ${Math.round(item.platformConfidence||0)}%`:"officielle")}</span>`:""}`
       : `<span class="subtle">—</span>`;
     return `<tr>
       <td class="time-cell">${fmt(item.datetime)}</td>
       <td><span class="${st.cls}">${escapeHtml(st.text)}</span></td>
-      <td><span class="train-number">${escapeHtml(trainNo)}</span><span class="mode-tag ${isBus?"bus":""}">${escapeHtml(mode)}</span></td>
+      <td><span class="train-number">${escapeHtml(trainNo)}</span><span class="mode-tag ${isBus?"bus":""} ${item.isW?"w":""}">${escapeHtml(mode)}</span></td>
       <td><div class="destination">${escapeHtml(target)}</div></td>
       <td>${platform}</td>
       <td>${isBus?"CAR":escapeHtml((mode||"TRAIN").replace("TER HDF","TER"))}</td>
@@ -206,7 +206,13 @@ $("search").addEventListener("click",async()=>{
   if(!state.from||!state.to){setStatus($("status"),"Choisis les deux gares dans les propositions.",true);return;}
   setStatus($("status"),"Recherche…");$("results").innerHTML="";
   try{
-    const trainQs=new URLSearchParams({from:state.from.id,to:state.to.id,datetime:apiDatetime()});
+    const trainQs=new URLSearchParams({
+      from:state.from.id,
+      to:state.to.id,
+      fromName:state.from.name,
+      toName:state.to.name,
+      datetime:apiDatetime()
+    });
     const busQs=new URLSearchParams({
       fromName:state.from.name,
       toName:state.to.name,
@@ -238,7 +244,9 @@ function renderJourneys(items){
     const details=sections.map(s=>{
       const d=s.display||{};
       const no=d.train_number||d.headsign||d.label||"";
-      const name=j.transportType==="bus"?"Car TER":([d.commercial_mode,no].filter(Boolean).join(" "));
+      const name=j.isW||j.transportType==="w"
+        ? `W ${no}`
+        : (j.transportType==="bus"?"Car TER":([d.commercial_mode,no].filter(Boolean).join(" ")));
       const depTrack=s.departure_platform
         ? `Départ voie ${escapeHtml(s.departure_platform)}${s.departure_platform_active?" ✓":(s.departure_platform_estimated?` (estimée${s.departure_platform_confidence?` ${Math.round(s.departure_platform_confidence)}%`:""})`:"")}`
         : "";
@@ -256,7 +264,7 @@ function renderJourneys(items){
         <div class="journey-time">${fmt(j.departure)}</div>
         <div><div class="journey-route">${escapeHtml(state.from?.name||"")} → ${escapeHtml(state.to?.name||"")}</div>
           <div class="journey-meta">${duration(j.duration)} • ${j.transfers===0?"Direct":`${j.transfers} correspondance(s)`}</div></div>
-        <div class="journey-badge">${j.transportType==="bus"?"🚌 Car TER":"🚆 Train"}</div>
+        <div class="journey-badge">${j.isW||j.transportType==="w"?"🚆 W / acheminement":(j.transportType==="bus"?"🚌 Car TER":"🚆 Train")}</div>
       </div>
       <div class="details">${details||"Détails non disponibles."}</div>
     </article>`;

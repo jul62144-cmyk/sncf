@@ -135,3 +135,12 @@ input:focus{outline:3px solid rgba(23,105,255,.12);border-color:#1769ff}
   border:1px dashed #9aa8b8;
 }
 .platform-label{white-space:nowrap}
+
+.mode-tag.w{
+  background:#f1edf8;
+  color:#5b3a78;
+  border:1px solid #cbb9dc;
+}
+.journey-badge{
+  white-space:nowrap;
+}
