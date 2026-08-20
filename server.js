@@ -1010,14 +1010,13 @@ app.get("/api/bus-journeys", async (req, res) => {
       return true;
     });
 
-    res.json({
-      journeys: deduped.slice(0, 16),
-      diagnostics: {
-        gtfsCount: gtfsFound.length,
-        sncfCoachCount: sncfFound.length,
-        gtfsError
-      }
-    });
+    // Compatibilité PWA / anciennes versions du frontend :
+    // cette route renvoie toujours un TABLEAU, comme les versions où les cars
+    // fonctionnaient correctement. Les diagnostics passent dans les headers.
+    res.set("X-Bus-GTFS-Count", String(gtfsFound.length));
+    res.set("X-Bus-SNCF-Count", String(sncfFound.length));
+    if (gtfsError) res.set("X-Bus-GTFS-Error", encodeURIComponent(gtfsError).slice(0, 500));
+    res.json(deduped.slice(0, 16));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }

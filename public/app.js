@@ -207,13 +207,27 @@ $("search").addEventListener("click",async()=>{
   setStatus($("status"),"Recherche…");$("results").innerHTML="";
   try{
     const trainQs=new URLSearchParams({from:state.from.id,to:state.to.id,datetime:apiDatetime()});
-    const busQs=new URLSearchParams({fromName:state.from.name,toName:state.to.name,date:$("date").value,time:$("time").value});
+    const busQs=new URLSearchParams({
+      fromName:state.from.name,
+      toName:state.to.name,
+      fromId:state.from.id,
+      toId:state.to.id,
+      date:$("date").value,
+      time:$("time").value
+    });
     const [tr,br]=await Promise.all([fetch(`/api/journeys?${trainQs}`),fetch(`/api/bus-journeys?${busQs}`)]);
-    const trains=await tr.json(),buses=await br.json();
+    const trains=await tr.json(),busPayload=await br.json();
     if(!tr.ok)throw new Error(trains.error||"Erreur SNCF");
-    const data=[...(Array.isArray(trains)?trains:[]),...(Array.isArray(buses)?buses:[])]
+    const buses=Array.isArray(busPayload)?busPayload:[];
+    const data=[...(Array.isArray(trains)?trains:[]),...buses]
       .sort((a,b)=>(a.departure||"").localeCompare(b.departure||""));
-    setStatus($("status"),`${data.length} trajet(s) trouvé(s).`);
+    const busCount=buses.length;
+    const gtfsCount=Number(br.headers.get("X-Bus-GTFS-Count")||0);
+    const sncfBusCount=Number(br.headers.get("X-Bus-SNCF-Count")||0);
+    const extra=busCount===0&&br.headers.get("X-Bus-GTFS-Error")
+      ?" • Cars temporairement indisponibles"
+      :"";
+    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER${extra}`);
     renderJourneys(data);
   }catch(e){setStatus($("status"),e.message,true);}
 });
