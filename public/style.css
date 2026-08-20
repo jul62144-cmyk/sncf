@@ -128,3 +128,10 @@ input:focus{outline:3px solid rgba(23,105,255,.12);border-color:#1769ff}
   display:inline-block;margin-left:6px;font-size:9px;font-weight:800;
   color:#53657a;background:#eef2f6;border-radius:4px;padding:2px 4px
 }
+
+.platform.estimated{
+  background:#eef2f6!important;
+  color:#53657a!important;
+  border:1px dashed #9aa8b8;
+}
+.platform-label{white-space:nowrap}

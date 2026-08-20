@@ -212,7 +212,7 @@ app.get("/api/departures", async (req, res) => {
       };
     });
 
-    res.json(await enrichWithTchoo(items, stopArea));
+    res.json(await enrichWithTchoo(items, stopArea, "departures"));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -255,7 +255,7 @@ app.get("/api/arrivals", async (req, res) => {
       };
     });
 
-    res.json(await enrichWithTchoo(items, stopArea));
+    res.json(await enrichWithTchoo(items, stopArea, "arrivals"));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -263,13 +263,133 @@ app.get("/api/arrivals", async (req, res) => {
 
 
 // -----------------------
-// Carto Tchoo - tableau de gare public (voies)
-// Le frontend Carto Tchoo utilise:
-// https://api.tchoo.net/api/carto.php?action=deparr&uic=<UIC>
+// Historique local des voies
+// Mémorise les voies OFFICIELLES observées par gare + numéro de train.
+// Les prévisions historiques restent explicitement marquées "estimée".
 // -----------------------
-const TCHOO_API = "https://api.tchoo.net/api/carto.php";
+const PLATFORM_HISTORY_FILE = path.join(__dirname, "platform-history.json");
+const PLATFORM_HISTORY_MAX_DAYS = 90;
+const PLATFORM_HISTORY_MIN_OBS = 2;
+const PLATFORM_HISTORY_MIN_CONFIDENCE = 60;
+
+const AUTO_COLLECTION_INTERVAL_MS = 5 * 60 * 1000;
+
+// Principales gares HDF suivies automatiquement.
+// Format UIC OCE 8 chiffres.
+const AUTO_COLLECTION_STATIONS = [
+  { name: "Arras", uic: "87342014" },
+  { name: "Lens", uic: "87345009" },
+  { name: "Douai", uic: "87345025" },
+  { name: "Lille Flandres", uic: "87286005" },
+  { name: "Béthune", uic: "87342055" },
+  { name: "Hazebrouck", uic: "87286203" },
+  { name: "Amiens", uic: "87313874" },
+  { name: "Calais Ville", uic: "87281063" },
+  { name: "Boulogne Ville", uic: "87317009" },
+  { name: "Valenciennes", uic: "87343005" },
+  { name: "Cambrai", uic: "87345504" },
+  { name: "Saint-Quentin", uic: "87296004" }
+];
+
+let autoCollectionRunning = false;
+let autoCollectionLastRun = null;
+let autoCollectionStats = {
+  stations: 0,
+  officialPlatformsSeen: 0,
+  errors: 0
+};
+
+
+let platformHistory = {};
+
+function loadPlatformHistory() {
+  try {
+    if (fs.existsSync(PLATFORM_HISTORY_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(PLATFORM_HISTORY_FILE, "utf8"));
+      if (parsed && typeof parsed === "object") platformHistory = parsed;
+    }
+  } catch (e) {
+    console.warn("Historique voies illisible:", e.message);
+    platformHistory = {};
+  }
+}
+loadPlatformHistory();
+
+function savePlatformHistory() {
+  try {
+    fs.writeFileSync(PLATFORM_HISTORY_FILE, JSON.stringify(platformHistory, null, 2), "utf8");
+  } catch (e) {
+    console.warn("Impossible d'enregistrer l'historique voies:", e.message);
+  }
+}
+
+function historyKey(uic, trainNumber) {
+  return `${uic}:${trainNumber}`;
+}
+
+function pruneHistoryEntry(entry) {
+  if (!entry || !Array.isArray(entry.observations)) return entry;
+  const cutoff = Date.now() - PLATFORM_HISTORY_MAX_DAYS * 86400000;
+  entry.observations = entry.observations.filter(o => {
+    const t = Date.parse(o.at || "");
+    return Number.isFinite(t) && t >= cutoff;
+  });
+  return entry;
+}
+
+function rememberOfficialPlatform(uic, trainNumber, platform) {
+  if (!uic || !trainNumber || !platform) return;
+  const key = historyKey(uic, trainNumber);
+  const now = new Date().toISOString();
+  const entry = pruneHistoryEntry(platformHistory[key] || { observations: [] });
+  const today = now.slice(0, 10);
+
+  // Une observation par jour suffit: évite de surpondérer le cache 30 s.
+  const sameDay = entry.observations.find(o => String(o.at || "").slice(0,10) === today);
+  if (sameDay) {
+    sameDay.platform = String(platform);
+    sameDay.at = now;
+  } else {
+    entry.observations.push({ platform: String(platform), at: now });
+  }
+
+  platformHistory[key] = entry;
+}
+
+function getHistoricalPlatform(uic, trainNumber) {
+  const key = historyKey(uic, trainNumber);
+  const entry = pruneHistoryEntry(platformHistory[key]);
+  if (!entry || entry.observations.length < PLATFORM_HISTORY_MIN_OBS) return null;
+
+  const counts = {};
+  for (const o of entry.observations) {
+    const p = String(o.platform || "").trim();
+    if (p) counts[p] = (counts[p] || 0) + 1;
+  }
+
+  const ranked = Object.entries(counts).sort((a,b) => b[1] - a[1]);
+  if (!ranked.length) return null;
+
+  const [platform, hits] = ranked[0];
+  const total = entry.observations.length;
+  const confidence = Math.round((hits / total) * 100);
+
+  if (confidence < PLATFORM_HISTORY_MIN_CONFIDENCE) return null;
+  return { platform, confidence, observations: total };
+}
+
+// -----------------------
+// Carto Tchoo - voies publiques / estimées
+// Frontend observé:
+// - tableau gare: /api/carto.php?action=deparr&uic=<UIC>
+// - voie estimée: /api/guess_my_platform.php?uic=<UIC>&num=<TRAIN>
+// -----------------------
+const TCHOO_API = "https://api.tchoo.net";
 const tchooCache = new Map();
+const tchooGuessCache = new Map();
 const TCHOO_TTL = 30 * 1000;
+const TCHOO_GUESS_TTL = 10 * 60 * 1000;
+const TCHOO_MIN_CONFIDENCE = 50;
 
 function stopAreaToOceUic(stopArea) {
   const m = String(stopArea || "").match(/OCE(\d{8})/i);
@@ -282,149 +402,203 @@ function normalizeTrainNumberTchoo(v) {
   return m ? m[1] : "";
 }
 
-function firstDefined(obj, names) {
-  for (const n of names) {
-    if (obj && obj[n] !== undefined && obj[n] !== null && obj[n] !== "") return obj[n];
-  }
-  return null;
-}
-
-function pickPlatform(obj) {
-  if (!obj || typeof obj !== "object") return null;
-
-  const direct = firstDefined(obj, [
-    "voie", "platform", "track", "quai", "voie_depart", "voie_arrivee",
-    "voieDepart", "voieArrivee", "numero_voie", "numeroVoie"
-  ]);
-
-  if (typeof direct === "string" || typeof direct === "number") {
-    const s = String(direct).trim();
-    if (s && s.length <= 8) return s;
-  }
-
-  if (direct && typeof direct === "object") {
-    const nested = firstDefined(direct, [
-      "numero", "number", "track", "voie", "platform", "libelle",
-      "voieCommerciale", "voiePrevi"
-    ]);
-    if (nested !== null) return String(nested).trim();
-  }
-
-  return null;
-}
-
-function looksLikeTrainObject(obj) {
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
-  const number = firstDefined(obj, [
-    "numero", "trainNumber", "numeroTrain", "numTrain", "num",
-    "train_number", "numero_course", "numeroCourse"
-  ]);
-  return Boolean(normalizeTrainNumberTchoo(number));
-}
-
-function collectTchooTrainObjects(value, out = [], depth = 0) {
-  if (depth > 8 || value == null) return out;
-  if (Array.isArray(value)) {
-    for (const item of value) collectTchooTrainObjects(item, out, depth + 1);
-    return out;
-  }
-  if (typeof value !== "object") return out;
-
-  if (looksLikeTrainObject(value)) out.push(value);
-  for (const v of Object.values(value)) {
-    if (v && typeof v === "object") collectTchooTrainObjects(v, out, depth + 1);
-  }
-  return out;
-}
-
-function normalizeTchooObject(obj) {
-  const number = normalizeTrainNumberTchoo(firstDefined(obj, [
-    "numero", "trainNumber", "numeroTrain", "numTrain", "num",
-    "train_number", "numero_course", "numeroCourse"
-  ]));
-  if (!number) return null;
-
-  const platform = pickPlatform(obj);
-
-  const origin = firstDefined(obj, [
-    "origine", "origin", "depart", "gareOrigine", "libelleOrigine"
-  ]);
-  const destination = firstDefined(obj, [
-    "destination", "fin", "terminus", "gareDestination", "libelleDestination"
-  ]);
-  const time = firstDefined(obj, [
-    "heure", "time", "departure", "arrival", "heureDepart",
-    "heureArrivee", "dateHeure", "datetime"
-  ]);
-
-  return {
-    trainNumber: number,
-    platform: platform || null,
-    origin: typeof origin === "string" ? origin : null,
-    destination: typeof destination === "string" ? destination : null,
-    time: typeof time === "string" ? time : null
-  };
-}
-
-async function fetchTchooStation(stopArea) {
-  const uic = stopAreaToOceUic(stopArea) || String(stopArea || "").replace(/\D/g, "");
-  if (!/^\d{8}$/.test(uic)) return [];
-
-  const cached = tchooCache.get(uic);
-  if (cached && Date.now() - cached.at < TCHOO_TTL) return cached.rows;
-
-  const url = `${TCHOO_API}?action=deparr&uic=${encodeURIComponent(uic)}`;
+async function tchooGetJson(url) {
   const r = await fetch(url, {
     headers: {
       "Accept": "application/json, text/plain, */*",
-      "User-Agent": "Mozilla/5.0 (compatible; Trajets-HDF/2.9)",
+      "User-Agent": "Mozilla/5.0 (compatible; Trajets-HDF/2.9.1)",
       "Referer": "https://carto.tchoo.net/"
     }
   });
-
   if (!r.ok) throw new Error(`Carto Tchoo HTTP ${r.status}`);
-
-  const contentType = r.headers.get("content-type") || "";
-  let data;
-  if (contentType.includes("json")) {
-    data = await r.json();
-  } else {
-    const txt = await r.text();
-    try { data = JSON.parse(txt); }
-    catch { throw new Error("Réponse Carto Tchoo non JSON"); }
-  }
-
-  const objects = collectTchooTrainObjects(data);
-  const rows = objects.map(normalizeTchooObject).filter(Boolean);
-
-  // Deduplicate by train/platform.
-  const seen = new Set();
-  const deduped = rows.filter(row => {
-    const k = `${row.trainNumber}|${row.platform || ""}`;
-    if (seen.has(k)) return false;
-    seen.add(k);
-    return true;
-  });
-
-  tchooCache.set(uic, { at: Date.now(), rows: deduped });
-  return deduped;
+  return await r.json();
 }
 
-async function enrichWithTchoo(items, stopArea) {
-  try {
-    const rows = await fetchTchooStation(stopArea);
-    const byTrain = new Map();
+async function fetchTchooGuess(uic, trainNumber) {
+  const key = `${uic}:${trainNumber}`;
+  const cached = tchooGuessCache.get(key);
+  if (cached && Date.now() - cached.at < TCHOO_GUESS_TTL) return cached.value;
 
-    for (const r of rows) {
-      // Prefer a row that actually contains a platform.
-      if (!byTrain.has(r.trainNumber) || r.platform) byTrain.set(r.trainNumber, r);
+  try {
+    const data = await tchooGetJson(
+      `${TCHOO_API}/api/guess_my_platform.php?uic=${encodeURIComponent(uic)}&num=${encodeURIComponent(trainNumber)}`
+    );
+
+    const first = Array.isArray(data) ? data[0] : null;
+    const value = first && first.platform && Number(first.percentage) >= TCHOO_MIN_CONFIDENCE
+      ? {
+          platform: String(first.platform),
+          percentage: Number(first.percentage)
+        }
+      : null;
+
+    tchooGuessCache.set(key, { at: Date.now(), value });
+    return value;
+  } catch (e) {
+    return null;
+  }
+}
+
+function normalizeTchooTrain(item, board) {
+  const trainNumber = normalizeTrainNumberTchoo(item?.num);
+  if (!trainNumber) return null;
+
+  const steps = Array.isArray(item.etapes) ? item.etapes : [];
+  let origin = "";
+  let destination = "";
+
+  if (board === "departures") {
+    origin = item.localite || "";
+    destination = steps.length ? (steps[steps.length - 1]?.localite || "") : (item.localite || "");
+  } else {
+    origin = item.localite || "";
+    destination = "";
+  }
+
+  return {
+    trainNumber,
+    platform: item.platform ? String(item.platform) : null,
+    platformEstimated: false,
+    platformConfidence: item.platform ? 100 : null,
+    platformSource: item.platform ? "tchoo-official" : null,
+    origin,
+    destination,
+    time: board === "departures" ? (item.fin || null) : (item.debut || null),
+    bus: Number(item.bus || 0) === 1,
+    mode: item.origine || ""
+  };
+}
+
+async function fetchTchooStation(stopArea, board) {
+  const uic = stopAreaToOceUic(stopArea) || String(stopArea || "").replace(/\D/g, "");
+  if (!/^\d{8}$/.test(uic)) return [];
+
+  const cacheKey = `${uic}:${board}`;
+  const cached = tchooCache.get(cacheKey);
+  if (cached && Date.now() - cached.at < TCHOO_TTL) return cached.rows;
+
+  const data = await tchooGetJson(
+    `${TCHOO_API}/api/carto.php?action=deparr&uic=${encodeURIComponent(uic)}`
+  );
+
+  const src = board === "arrivals"
+    ? (Array.isArray(data?.arrivals) ? data.arrivals : [])
+    : (Array.isArray(data?.departures) ? data.departures : []);
+
+  let rows = src.map(x => normalizeTchooTrain(x, board)).filter(Boolean);
+
+  // Apprentissage: uniquement les voies officielles publiées dans train.platform.
+  let learned = false;
+  for (const r of rows) {
+    if (r.platform && !r.platformEstimated && !r.bus) {
+      rememberOfficialPlatform(uic, r.trainNumber, r.platform);
+      learned = true;
     }
+  }
+  if (learned) savePlatformHistory();
+
+  // Carto Tchoo lui-même appelle guess_my_platform.php lorsqu'item.platform est absent.
+  // On reproduit ce comportement, mais en marquant explicitement la donnée comme ESTIMÉE.
+  const missing = rows.filter(r => !r.platform && !r.bus);
+  const guesses = await Promise.all(
+    missing.map(r => fetchTchooGuess(uic, r.trainNumber))
+  );
+
+  let gi = 0;
+  rows = rows.map(r => {
+    if (r.platform || r.bus) return r;
+    const g = guesses[gi++];
+    if (!g) return r;
+    return {
+      ...r,
+      platform: g.platform,
+      platformEstimated: true,
+      platformConfidence: g.percentage,
+      platformSource: "tchoo-estimate"
+    };
+  });
+
+  // Dernier recours: historique local. Il faut au moins 2 jours d'observation
+  // et 60 % de concordance pour afficher une estimation.
+  rows = rows.map(r => {
+    if (r.platform || r.bus) return r;
+    const h = getHistoricalPlatform(uic, r.trainNumber);
+    if (!h) return r;
+    return {
+      ...r,
+      platform: h.platform,
+      platformEstimated: true,
+      platformConfidence: h.confidence,
+      platformObservations: h.observations,
+      platformSource: "local-history"
+    };
+  });
+
+  tchooCache.set(cacheKey, { at: Date.now(), rows });
+  return rows;
+}
+
+
+async function collectStationHistory(station) {
+  let official = 0;
+  let errors = 0;
+
+  for (const board of ["departures", "arrivals"]) {
+    try {
+      const rows = await fetchTchooStation(`stop_area:OCE${station.uic}`, board);
+      official += rows.filter(r => r.platform && !r.platformEstimated && !r.bus).length;
+    } catch (e) {
+      errors++;
+      console.warn(`Collecte auto ${station.name}/${board}:`, e.message);
+    }
+  }
+
+  return { official, errors };
+}
+
+async function runAutoPlatformCollection() {
+  if (autoCollectionRunning) return;
+  autoCollectionRunning = true;
+
+  const stats = { stations: 0, officialPlatformsSeen: 0, errors: 0 };
+
+  try {
+    for (const station of AUTO_COLLECTION_STATIONS) {
+      const r = await collectStationHistory(station);
+      stats.stations++;
+      stats.officialPlatformsSeen += r.official;
+      stats.errors += r.errors;
+
+      // Petite pause entre gares pour rester raisonnable avec la source publique.
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  } finally {
+    autoCollectionLastRun = new Date().toISOString();
+    autoCollectionStats = stats;
+    autoCollectionRunning = false;
+    console.log(
+      `[Historique voies] collecte auto terminée: ${stats.stations} gares, ` +
+      `${stats.officialPlatformsSeen} voies officielles vues, ${stats.errors} erreur(s)`
+    );
+  }
+}
+
+function startAutoPlatformCollection() {
+  // Premier passage peu après le démarrage.
+  setTimeout(() => runAutoPlatformCollection().catch(() => {}), 3000);
+
+  // Puis toutes les 5 minutes tant que le serveur tourne.
+  setInterval(() => runAutoPlatformCollection().catch(() => {}), AUTO_COLLECTION_INTERVAL_MS);
+}
+
+async function enrichWithTchoo(items, stopArea, board) {
+  try {
+    const rows = await fetchTchooStation(stopArea, board);
+    const byTrain = new Map(rows.map(r => [r.trainNumber, r]));
 
     return items.map(item => {
       if (item.transportType === "bus") return item;
-      const n = normalizeTrainNumberTchoo(
-        item.trainNumber || item.label || item.headsign
-      );
+      const n = normalizeTrainNumberTchoo(item.trainNumber || item.label || item.headsign);
       const t = byTrain.get(n);
       if (!t) return item;
 
@@ -432,8 +606,12 @@ async function enrichWithTchoo(items, stopArea) {
         ...item,
         trainNumber: n || item.trainNumber,
         platform: t.platform || item.platform || null,
-        origin: t.origin || item.origin || "",
-        direction: t.destination || item.direction || "",
+        platformEstimated: Boolean(t.platformEstimated),
+        platformConfidence: t.platformConfidence,
+        platformSource: t.platformSource || null,
+        platformObservations: t.platformObservations || null,
+        origin: board === "arrivals" ? (t.origin || item.origin || "") : (item.origin || ""),
+        direction: board === "departures" ? (t.destination || item.direction || "") : item.direction,
         tchoo: Boolean(t.platform)
       };
     });
@@ -446,11 +624,17 @@ async function enrichWithTchoo(items, stopArea) {
 app.get("/api/tchoo-test", async (req, res) => {
   try {
     const stopArea = String(req.query.stopArea || "");
-    const rows = await fetchTchooStation(stopArea);
+    const board = String(req.query.board || "departures") === "arrivals" ? "arrivals" : "departures";
+    const rows = await fetchTchooStation(stopArea, board);
+
     res.json({
       count: rows.length,
+      officialPlatforms: rows.filter(r => r.platform && !r.platformEstimated).length,
+      estimatedPlatforms: rows.filter(r => r.platformEstimated).length,
+      tchooEstimatedPlatforms: rows.filter(r => r.platformSource === "tchoo-estimate").length,
+      historicalPlatforms: rows.filter(r => r.platformSource === "local-history").length,
       withPlatform: rows.filter(r => r.platform).length,
-      sample: rows.filter(r => r.platform).slice(0, 10)
+      sample: rows.filter(r => r.platform).slice(0, 15)
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -721,6 +905,25 @@ app.get("/api/bus-board", async (req, res) => {
 });
 
 
+
+app.get("/api/platform-history-status", (req, res) => {
+  const entries = Object.keys(platformHistory).length;
+  const observations = Object.values(platformHistory).reduce(
+    (sum, e) => sum + (Array.isArray(e?.observations) ? e.observations.length : 0),
+    0
+  );
+
+  res.json({
+    autoCollectionRunning,
+    autoCollectionLastRun,
+    intervalMinutes: AUTO_COLLECTION_INTERVAL_MS / 60000,
+    stations: AUTO_COLLECTION_STATIONS,
+    stats: autoCollectionStats,
+    historyEntries: entries,
+    observations
+  });
+});
+
 app.get("/api/status", (req, res) => {
   res.json({
     tokenConfigured: Boolean(TOKEN),
@@ -728,6 +931,8 @@ app.get("/api/status", (req, res) => {
     platformSource: "API SNCF publique quand disponible"
   });
 });
+
+startAutoPlatformCollection();
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`);

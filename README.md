@@ -1,43 +1,48 @@
-# Trajets HDF — V2.9 publique
+# Trajets HDF — V2.9.3 publique
 
-## Nouveauté principale : voies via Carto Tchoo
+## Collecte automatique des voies
 
-L'analyse du frontend Carto Tchoo a montré que son tableau de gare utilise
-l'endpoint public :
+La V2.9.3 enrichit l'historique même si aucune gare n'est recherchée dans l'application.
 
-`https://api.tchoo.net/api/carto.php?action=deparr&uic=<UIC>`
+Tant que le serveur Node reste démarré, il interroge automatiquement toutes les 5 minutes :
 
-La V2.9 interroge cet endpoint côté serveur et fusionne les informations avec
-les trains SNCF par numéro de train.
+- Arras
+- Lens
+- Douai
+- Lille Flandres
+- Béthune
+- Hazebrouck
+- Amiens
+- Calais Ville
+- Boulogne Ville
+- Valenciennes
+- Cambrai
+- Saint-Quentin
 
-Quand une voie est trouvée via Carto Tchoo, la colonne Voie / Quai l'affiche
-avec la mention `Tchoo`.
+Pour chaque gare, les départs et arrivées Carto Tchoo sont consultés.
+Seules les voies officielles sont enregistrées dans `platform-history.json`.
 
-## Sécurité / robustesse
+## Prudence avec la source
 
-- aucune authentification SNCF interne ;
-- aucun cookie InPulse ou Geopulse ;
-- cache de 30 secondes pour limiter les appels ;
-- si Carto Tchoo est indisponible ou change de format, l'application continue
-  à fonctionner avec API SNCF + GTFS HDF ;
-- un extracteur tolérant recherche plusieurs structures de réponse afin de
-  supporter les variations de format.
+Une pause de 500 ms est ajoutée entre les gares pour éviter d'enchaîner trop rapidement
+les requêtes vers la source publique.
 
-## Test diagnostic
+## Priorité d'affichage
 
-Après `npm start`, ouvrir par exemple :
+1. voie officielle Carto Tchoo ;
+2. estimation Carto Tchoo >= 50 % ;
+3. estimation locale issue de l'historique ;
+4. aucune voie.
+
+## Diagnostic
+
+Etat de la collecte automatique :
+
+`http://localhost:3000/api/platform-history-status`
+
+Historique et voies d'Arras :
 
 `http://localhost:3000/api/tchoo-test?stopArea=stop_area:OCE87342014`
 
-La réponse indique :
-- `count` : trains détectés ;
-- `withPlatform` : trains avec voie ;
-- `sample` : exemples train → voie.
-
-## Fonctions conservées
-- itinéraires trains + cars TER ;
-- départs / arrivées ;
-- numéros de train ;
-- favoris de gares dans la colonne de gauche ;
-- origine / destination ;
-- PWA installable.
+Important : si l'ordinateur est éteint ou le serveur `npm start` arrêté, la collecte automatique
+s'arrête aussi. Sur un hébergement permanent, elle continue tant que le service Node tourne.
