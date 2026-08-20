@@ -1,13 +1,10 @@
-# Trajets SNCF Hauts-de-France — V2.3
+# Trajets SNCF Hauts-de-France — V2.4
 
-Nouveautés :
-- cars TER ajoutés aux tableaux Départs et Arrivées ;
-- fusion chronologique trains + cars ;
-- affichage de la voie/quai lorsqu'une source la fournit ;
-- conservation de l'itinéraire Train + Car de la V2.2 ;
-- PWA et favoris conservés.
-
-Important : si l'API/GTFS ne fournit aucune voie, l'application n'en invente pas.
+Corrections :
+- cars TER corrigés dans la recherche d'itinéraire ;
+- même rapprochement OCECar que dans Départs/Arrivées ;
+- recherche plus profonde des informations de quai/voie côté API SNCF ;
+- affichage explicite « Voie non disponible » si la source ne fournit pas cette information.
 
 Installation :
 1. Copier .env.example en .env

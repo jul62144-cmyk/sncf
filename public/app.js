@@ -381,7 +381,9 @@ $("board-search-btn").addEventListener("click", async () => {
         : (item.origin || item.headsign || item.direction || "Origine non indiquée");
 
       const badge = item.transportType === "bus" ? "🚌 Car TER" : "🚆 Train";
-      const platform = item.platform ? ` • Voie ${escapeHtml(item.platform)}` : "";
+      const platform = item.platform
+        ? ` • Voie ${escapeHtml(item.platform)}`
+        : ` • Voie non disponible`;
 
       return `<article class="journey">
         <div class="board-row">

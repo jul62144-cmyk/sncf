@@ -149,7 +149,8 @@ app.get("/api/departures", async (req, res) => {
     const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/departures`, {
       from_datetime: datetime,
       duration: 7200,
-      count: 30
+      count: 30,
+      depth: 3
     });
 
     const items = (data.departures || []).map(d => ({
@@ -164,7 +165,12 @@ app.get("/api/departures", async (req, res) => {
       commercialMode: d.display_informations?.commercial_mode || "",
       network: d.display_informations?.network || "",
       status: d.stop_date_time?.data_freshness || null,
-      platform: d.stop_point?.platform_code || d.stop_point?.platform || d.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] || null
+      platform:
+        d.stop_point?.platform_code ||
+        d.stop_point?.platform ||
+        d.stop_point?.codes?.find(c => /platform|track|quai|voie/i.test(c.type || c.name || ""))?.value ||
+        d.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] ||
+        null
     }));
     res.json(items);
   } catch (e) {
@@ -180,7 +186,8 @@ app.get("/api/arrivals", async (req, res) => {
     const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/arrivals`, {
       from_datetime: datetime,
       duration: 7200,
-      count: 30
+      count: 30,
+      depth: 3
     });
 
     const items = (data.arrivals || []).map(a => ({
@@ -195,7 +202,12 @@ app.get("/api/arrivals", async (req, res) => {
       commercialMode: a.display_informations?.commercial_mode || "",
       network: a.display_informations?.network || "",
       status: a.stop_date_time?.data_freshness || null,
-      platform: a.stop_point?.platform_code || a.stop_point?.platform || a.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] || null
+      platform:
+        a.stop_point?.platform_code ||
+        a.stop_point?.platform ||
+        a.stop_point?.codes?.find(c => /platform|track|quai|voie/i.test(c.type || c.name || ""))?.value ||
+        a.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] ||
+        null
     }));
     res.json(items);
   } catch (e) {
@@ -312,6 +324,7 @@ function secsToSncfDateTime(dateStr, secs) {
   return `${d.getFullYear()}${p(d.getMonth()+1)}${p(d.getDate())}T${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
 }
 
+
 app.get("/api/bus-journeys", async (req, res) => {
   try {
     const fromName = String(req.query.fromName || "").trim();
@@ -324,34 +337,42 @@ app.get("/api/bus-journeys", async (req, res) => {
     }
 
     const gtfs = await loadGtfs();
-    const nf = norm(fromName), nt = norm(toName);
-
-    // OCECar stops are specifically the TER road coach stop points.
-    const fromStops = gtfs.stops.filter(s =>
-      /OCECar/i.test(s.stop_id) && (norm(s.stop_name) === nf || norm(s.stop_name).includes(nf) || nf.includes(norm(s.stop_name)))
-    );
-    const toStops = gtfs.stops.filter(s =>
-      /OCECar/i.test(s.stop_id) && (norm(s.stop_name) === nt || norm(s.stop_name).includes(nt) || nt.includes(norm(s.stop_name)))
-    );
+    const fromStops = matchCarStops(gtfs.stops, fromName);
+    const toStops = matchCarStops(gtfs.stops, toName);
 
     const fromIds = new Set(fromStops.map(s => s.stop_id));
     const toIds = new Set(toStops.map(s => s.stop_id));
     const minSecs = gtfsSecs(time + ":00");
 
     const found = [];
+
     for (const trip of gtfs.trips) {
-      const route = gtfs.routeById.get(trip.route_id);
-      // GTFS route_type 3 = bus. Some SNCF feeds may use coach-like extended types;
-      // OCECar stop points are the additional safeguard.
-      if (!route || !["3","700","701","702","704","705","710","712","715","717"].includes(route.route_type)) continue;
       if (!serviceRuns(gtfs, trip.service_id, date)) continue;
 
+      const route = gtfs.routeById.get(trip.route_id);
       const times = gtfs.timesByTrip.get(trip.trip_id) || [];
-      let fromIdx = -1, toIdx = -1;
+      if (!times.length) continue;
+
+      // Recognize coach journeys by route type OR OCECar stop points.
+      const routeType = String(route?.route_type || "");
+      const isBusType = ["3","700","701","702","704","705","710","712","715","717"].includes(routeType);
+      const hasCarStop = times.some(st => /OCECar/i.test(st.stop_id));
+      if (!isBusType && !hasCarStop) continue;
+
+      let fromIdx = -1;
+      let toIdx = -1;
+
       for (let i = 0; i < times.length; i++) {
-        if (fromIdx < 0 && fromIds.has(times[i].stop_id)) fromIdx = i;
-        if (fromIdx >= 0 && i > fromIdx && toIds.has(times[i].stop_id)) { toIdx = i; break; }
+        if (fromIdx < 0 && fromIds.has(times[i].stop_id)) {
+          fromIdx = i;
+          continue;
+        }
+        if (fromIdx >= 0 && i > fromIdx && toIds.has(times[i].stop_id)) {
+          toIdx = i;
+          break;
+        }
       }
+
       if (fromIdx < 0 || toIdx < 0) continue;
 
       const dep = gtfsSecs(times[fromIdx].departure_time);
@@ -376,8 +397,8 @@ app.get("/api/bus-journeys", async (req, res) => {
           display: {
             commercial_mode: "Car TER",
             network: "TER Hauts-de-France",
-            label: route.route_short_name || route.route_long_name || "",
-            direction: trip.trip_headsign || "",
+            label: route?.route_short_name || route?.route_long_name || trip.trip_short_name || "",
+            direction: trip.trip_headsign || gtfs.stopById.get(times[toIdx].stop_id)?.stop_name || "",
             headsign: trip.trip_headsign || ""
           }
         }]
@@ -385,7 +406,7 @@ app.get("/api/bus-journeys", async (req, res) => {
     }
 
     found.sort((a,b) => a.departure.localeCompare(b.departure));
-    res.json(found.slice(0, 8));
+    res.json(found.slice(0, 12));
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
