@@ -172,7 +172,7 @@ app.get("/api/departures", async (req, res) => {
         d.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] ||
         null
     }));
-    res.json(items);
+    res.json(await enrichBoardWithGdc(items, "Departures", stopArea));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -209,11 +209,98 @@ app.get("/api/arrivals", async (req, res) => {
         a.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] ||
         null
     }));
-    res.json(items);
+    res.json(await enrichBoardWithGdc(items, "Arrivals", stopArea));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
 });
+
+
+// -----------------------
+// SNCF Gares & Connexions - voies/quais (source publique)
+// -----------------------
+const GDC_BASE = "https://www.garesetconnexions.sncf/schedule-table";
+const gdcCache = new Map();
+const GDC_TTL = 30 * 1000;
+
+function normalizeTrainNumber(v) {
+  return String(v || "").replace(/\D/g, "");
+}
+
+function stopAreaToGdcUic(stopAreaId) {
+  // IDs Navitia SNCF généralement sous la forme stop_area:OCE87342014.
+  const m = String(stopAreaId || "").match(/OCE(\d{8})/i);
+  return m ? `00${m[1]}` : null;
+}
+
+async function gdcFetch(board, gdcUic) {
+  const key = `${board}:${gdcUic}`;
+  const cached = gdcCache.get(key);
+  if (cached && Date.now() - cached.at < GDC_TTL) return cached.data;
+
+  const url = `${GDC_BASE}/${board}/${encodeURIComponent(gdcUic)}`;
+  const r = await fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "Mozilla/5.0 Trajets-HDF/2.5"
+    }
+  });
+
+  if (!r.ok) {
+    const err = new Error(`Gares & Connexions: ${r.status}`);
+    err.status = r.status;
+    throw err;
+  }
+
+  const data = await r.json();
+  gdcCache.set(key, { at: Date.now(), data });
+  return data;
+}
+
+function gdcTrackIndex(rows) {
+  const map = new Map();
+  for (const item of Array.isArray(rows) ? rows : []) {
+    const n = normalizeTrainNumber(item.trainNumber);
+    if (!n) continue;
+
+    map.set(n, {
+      track: item.platform?.track || null,
+      isTrackActive: Boolean(item.platform?.isTrackactive),
+      scheduledTime: item.scheduledTime || null,
+      actualTime: item.actualTime || null,
+      origin: item.traffic?.origin || null,
+      destination: item.traffic?.destination || null,
+      trainType: item.trainType || null
+    });
+  }
+  return map;
+}
+
+async function enrichBoardWithGdc(items, board, stopAreaId) {
+  const gdcUic = stopAreaToGdcUic(stopAreaId);
+  if (!gdcUic) return items;
+
+  try {
+    const rows = await gdcFetch(board, gdcUic);
+    const byTrain = gdcTrackIndex(rows);
+
+    return items.map(item => {
+      const trainNumber = normalizeTrainNumber(item.label || item.headsign);
+      const match = byTrain.get(trainNumber);
+      if (!match) return item;
+
+      return {
+        ...item,
+        platform: match.track || item.platform || null,
+        platformActive: match.isTrackActive,
+        gdc: match
+      };
+    });
+  } catch (e) {
+    console.warn("Gares & Connexions indisponible:", e.message);
+    return items;
+  }
+}
 
 // -----------------------
 // TER Hauts-de-France GTFS (cars)
@@ -475,6 +562,28 @@ app.get("/api/bus-board", async (req, res) => {
     res.json(out.slice(0, 30));
   } catch (e) {
     res.status(500).json({ error: e.message });
+  }
+});
+
+
+app.get("/api/gdc-test", async (req, res) => {
+  try {
+    const stopArea = String(req.query.stopArea || "");
+    const gdcUic = stopAreaToGdcUic(stopArea);
+    if (!gdcUic) return res.status(400).json({ error: "UIC Gares & Connexions introuvable." });
+
+    const [departures, arrivals] = await Promise.all([
+      gdcFetch("Departures", gdcUic),
+      gdcFetch("Arrivals", gdcUic)
+    ]);
+
+    res.json({
+      gdcUic,
+      departures: Array.isArray(departures) ? departures.length : 0,
+      arrivals: Array.isArray(arrivals) ? arrivals.length : 0
+    });
+  } catch (e) {
+    res.status(e.status || 500).json({ error: e.message });
   }
 });
 

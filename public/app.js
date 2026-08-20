@@ -382,7 +382,7 @@ $("board-search-btn").addEventListener("click", async () => {
 
       const badge = item.transportType === "bus" ? "🚌 Car TER" : "🚆 Train";
       const platform = item.platform
-        ? ` • Voie ${escapeHtml(item.platform)}`
+        ? ` • Voie ${escapeHtml(item.platform)}${item.platformActive ? " ✓" : ""}`
         : ` • Voie non disponible`;
 
       return `<article class="journey">

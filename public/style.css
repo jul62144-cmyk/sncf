@@ -251,3 +251,5 @@ input:focus {
   .board-row { grid-template-columns: 62px 1fr; }
   .board-badge { grid-column: 2; justify-self: start; }
 }
+
+/* V2.5 : voie Gares & Connexions, ✓ = voie active/confirmée par la source publique */
