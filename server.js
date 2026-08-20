@@ -115,6 +115,8 @@ app.get("/api/journeys", async (req, res) => {
         mode: s.mode || null,
         from: s.from?.name || s.from?.stop_point?.name || null,
         to: s.to?.name || s.to?.stop_point?.name || null,
+        from_id: s.from?.id || s.from?.stop_point?.id || null,
+        to_id: s.to?.id || s.to?.stop_point?.id || null,
         departure: s.departure_date_time || null,
         arrival: s.arrival_date_time || null,
         display: s.display_informations ? {
@@ -122,10 +124,36 @@ app.get("/api/journeys", async (req, res) => {
           network: s.display_informations.network,
           label: s.display_informations.label,
           direction: s.display_informations.direction,
-          headsign: s.display_informations.headsign
+          headsign: s.display_informations.headsign,
+          train_number: s.display_informations.headsign || s.display_informations.code || s.display_informations.label
         } : null
       }))
     }));
+
+    for (const journey of journeys) {
+      for (const section of journey.sections) {
+        if (section.type !== "public_transport" || !section.display) continue;
+
+        const trainNumber = normalizeTrainNumber(
+          section.display.train_number ||
+          section.display.headsign ||
+          section.display.label
+        );
+
+        section.display.train_number = trainNumber || section.display.headsign || section.display.label || "";
+
+        if (journey.transportType !== "bus" && trainNumber) {
+          const [depTrack, arrTrack] = await Promise.all([
+            findTrackForTrain(section.from_id, "Departures", trainNumber),
+            findTrackForTrain(section.to_id, "Arrivals", trainNumber)
+          ]);
+          section.departure_platform = depTrack?.track || null;
+          section.departure_platform_active = depTrack?.active || false;
+          section.arrival_platform = arrTrack?.track || null;
+          section.arrival_platform_active = arrTrack?.active || false;
+        }
+      }
+    }
 
     res.json(journeys);
   } catch (e) {
@@ -135,44 +163,198 @@ app.get("/api/journeys", async (req, res) => {
 
 
 // -----------------------
-// Tableaux Départs / Arrivées SNCF
+// SNCF Gares & Connexions - tableau public trains / voies
 // -----------------------
-function mapStopDateTime(dt) {
-  return dt || null;
+const GDC_BASE = "https://www.garesetconnexions.sncf/schedule-table";
+const gdcCache = new Map();
+const GDC_TTL = 25 * 1000;
+
+function normalizeTrainNumber(v) {
+  const s = String(v || "").trim();
+  const match = s.match(/\b(\d{4,6})\b/);
+  return match ? match[1] : s.replace(/\D/g, "");
 }
 
+function stopIdToGdcUic(stopId) {
+  // Navitia/OCE : OCE87342014 -> G&C : 0087342014
+  const m = String(stopId || "").match(/OCE(\d{8})/i);
+  return m ? `00${m[1]}` : null;
+}
+
+async function gdcFetch(board, stopId) {
+  const uic = stopIdToGdcUic(stopId);
+  if (!uic) return [];
+
+  const key = `${board}:${uic}`;
+  const cached = gdcCache.get(key);
+  if (cached && Date.now() - cached.at < GDC_TTL) return cached.data;
+
+  const url = `${GDC_BASE}/${board}/${uic}`;
+  const r = await fetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "User-Agent": "Mozilla/5.0 (compatible; Trajets-HDF/2.6)"
+    }
+  });
+
+  if (!r.ok) throw new Error(`Gares & Connexions ${r.status}`);
+
+  const data = await r.json();
+  const rows = Array.isArray(data) ? data : [];
+  gdcCache.set(key, { at: Date.now(), data: rows });
+  return rows;
+}
+
+function isoToSncfDateTime(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+
+  // G&C timestamps are absolute; display in Europe/Paris.
+  const parts = new Intl.DateTimeFormat("fr-FR", {
+    timeZone: "Europe/Paris",
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", second: "2-digit",
+    hour12: false
+  }).formatToParts(d);
+
+  const get = type => parts.find(p => p.type === type)?.value || "";
+  return `${get("year")}${get("month")}${get("day")}T${get("hour")}${get("minute")}${get("second")}`;
+}
+
+function gdcRowToBoardItem(row, mode) {
+  const scheduled = isoToSncfDateTime(row.scheduledTime);
+  const actual = isoToSncfDateTime(row.actualTime || row.scheduledTime);
+
+  return {
+    type: mode === "Arrivals" ? "arrival" : "departure",
+    source: "gares-et-connexions",
+    transportType: "train",
+    datetime: actual,
+    baseDatetime: scheduled,
+    trainNumber: String(row.trainNumber || ""),
+    label: String(row.trainNumber || ""),
+    commercialMode: row.trainType || "Train",
+    network: row.trainType || "",
+    origin: row.traffic?.origin || "",
+    direction: row.traffic?.destination || "",
+    headsign: row.traffic?.destination || "",
+    platform: row.platform?.track || null,
+    platformActive: Boolean(row.platform?.isTrackactive),
+    status: row.informationStatus?.trainStatus || null,
+    delay: row.informationStatus?.delay ?? null,
+    circulationId: row.circulationId || null,
+    uic: row.uic || null
+  };
+}
+
+function sncfBoardItemFromDeparture(d) {
+  const info = d.display_informations || {};
+  const trainNumber = normalizeTrainNumber(info.headsign || info.code || info.label);
+
+  return {
+    type: "departure",
+    source: "api-sncf",
+    transportType: "train",
+    datetime: d.stop_date_time?.departure_date_time || null,
+    baseDatetime: d.stop_date_time?.base_departure_date_time || null,
+    stop: d.stop_point?.name || "",
+    trainNumber,
+    direction: info.direction || "",
+    headsign: info.headsign || "",
+    label: info.label || trainNumber || "",
+    commercialMode: info.commercial_mode || "",
+    network: info.network || "",
+    status: d.stop_date_time?.data_freshness || null,
+    platform:
+      d.stop_point?.platform_code ||
+      d.stop_point?.platform ||
+      d.stop_point?.codes?.find(c => /platform|track|quai|voie/i.test(c.type || c.name || ""))?.value ||
+      null
+  };
+}
+
+function sncfBoardItemFromArrival(a) {
+  const info = a.display_informations || {};
+  const trainNumber = normalizeTrainNumber(info.headsign || info.code || info.label);
+
+  return {
+    type: "arrival",
+    source: "api-sncf",
+    transportType: "train",
+    datetime: a.stop_date_time?.arrival_date_time || null,
+    baseDatetime: a.stop_date_time?.base_arrival_date_time || null,
+    stop: a.stop_point?.name || "",
+    trainNumber,
+    origin: info.direction || "",
+    direction: info.direction || "",
+    headsign: info.headsign || "",
+    label: info.label || trainNumber || "",
+    commercialMode: info.commercial_mode || "",
+    network: info.network || "",
+    status: a.stop_date_time?.data_freshness || null,
+    platform:
+      a.stop_point?.platform_code ||
+      a.stop_point?.platform ||
+      a.stop_point?.codes?.find(c => /platform|track|quai|voie/i.test(c.type || c.name || ""))?.value ||
+      null
+  };
+}
+
+function filterBoardFromDatetime(items, fromDatetime) {
+  if (!fromDatetime) return items;
+  const m = String(fromDatetime).match(/^(\d{8})T(\d{6})$/);
+  if (!m) return items;
+  const key = `${m[1]}T${m[2]}`;
+
+  // Keep a small tolerance before requested time.
+  const requestedMins = Number(m[2].slice(0,2)) * 60 + Number(m[2].slice(2,4));
+  return items.filter(item => {
+    const dt = item.datetime || item.baseDatetime || "";
+    if (!dt.startsWith(m[1])) return false;
+    const hm = dt.slice(9,13);
+    if (hm.length !== 4) return true;
+    const mins = Number(hm.slice(0,2))*60 + Number(hm.slice(2,4));
+    return mins >= requestedMins - 2;
+  });
+}
+
+async function getMergedTrainBoard(mode, stopArea, datetime) {
+  let gdcRows = [];
+  try {
+    gdcRows = await gdcFetch(mode, stopArea);
+  } catch (e) {
+    console.warn("Gares & Connexions indisponible:", e.message);
+  }
+
+  const gdcItems = filterBoardFromDatetime(
+    gdcRows.map(row => gdcRowToBoardItem(row, mode)),
+    datetime
+  );
+
+  // G&C is preferred because it contains trainNumber + platform.track.
+  if (gdcItems.length) return gdcItems.slice(0, 40);
+
+  // Fallback to SNCF public API.
+  const endpoint = mode === "Departures" ? "departures" : "arrivals";
+  const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/${endpoint}`, {
+    from_datetime: datetime,
+    duration: 10800,
+    count: 40,
+    depth: 3
+  });
+
+  return mode === "Departures"
+    ? (data.departures || []).map(sncfBoardItemFromDeparture)
+    : (data.arrivals || []).map(sncfBoardItemFromArrival);
+}
+
+// Boards
 app.get("/api/departures", async (req, res) => {
   try {
     const { stopArea, datetime } = req.query;
     if (!stopArea) return res.status(400).json({ error: "Gare obligatoire." });
-
-    const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/departures`, {
-      from_datetime: datetime,
-      duration: 7200,
-      count: 30,
-      depth: 3
-    });
-
-    const items = (data.departures || []).map(d => ({
-      type: "departure",
-      transportType: "train",
-      datetime: mapStopDateTime(d.stop_date_time?.departure_date_time),
-      baseDatetime: mapStopDateTime(d.stop_date_time?.base_departure_date_time),
-      stop: d.stop_point?.name || "",
-      direction: d.display_informations?.direction || "",
-      headsign: d.display_informations?.headsign || "",
-      label: d.display_informations?.label || "",
-      commercialMode: d.display_informations?.commercial_mode || "",
-      network: d.display_informations?.network || "",
-      status: d.stop_date_time?.data_freshness || null,
-      platform:
-        d.stop_point?.platform_code ||
-        d.stop_point?.platform ||
-        d.stop_point?.codes?.find(c => /platform|track|quai|voie/i.test(c.type || c.name || ""))?.value ||
-        d.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] ||
-        null
-    }));
-    res.json(await enrichBoardWithGdc(items, "Departures", stopArea));
+    res.json(await getMergedTrainBoard("Departures", stopArea, datetime));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -182,123 +364,25 @@ app.get("/api/arrivals", async (req, res) => {
   try {
     const { stopArea, datetime } = req.query;
     if (!stopArea) return res.status(400).json({ error: "Gare obligatoire." });
-
-    const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/arrivals`, {
-      from_datetime: datetime,
-      duration: 7200,
-      count: 30,
-      depth: 3
-    });
-
-    const items = (data.arrivals || []).map(a => ({
-      type: "arrival",
-      transportType: "train",
-      datetime: mapStopDateTime(a.stop_date_time?.arrival_date_time),
-      baseDatetime: mapStopDateTime(a.stop_date_time?.base_arrival_date_time),
-      stop: a.stop_point?.name || "",
-      direction: a.display_informations?.direction || "",
-      headsign: a.display_informations?.headsign || "",
-      label: a.display_informations?.label || "",
-      commercialMode: a.display_informations?.commercial_mode || "",
-      network: a.display_informations?.network || "",
-      status: a.stop_date_time?.data_freshness || null,
-      platform:
-        a.stop_point?.platform_code ||
-        a.stop_point?.platform ||
-        a.stop_point?.codes?.find(c => /platform|track|quai|voie/i.test(c.type || c.name || ""))?.value ||
-        a.stop_point?.name?.match(/(?:voie|quai)\s*([A-Z0-9]+)/i)?.[1] ||
-        null
-    }));
-    res.json(await enrichBoardWithGdc(items, "Arrivals", stopArea));
+    res.json(await getMergedTrainBoard("Arrivals", stopArea, datetime));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
 });
 
-
-// -----------------------
-// SNCF Gares & Connexions - voies/quais (source publique)
-// -----------------------
-const GDC_BASE = "https://www.garesetconnexions.sncf/schedule-table";
-const gdcCache = new Map();
-const GDC_TTL = 30 * 1000;
-
-function normalizeTrainNumber(v) {
-  return String(v || "").replace(/\D/g, "");
-}
-
-function stopAreaToGdcUic(stopAreaId) {
-  // IDs Navitia SNCF généralement sous la forme stop_area:OCE87342014.
-  const m = String(stopAreaId || "").match(/OCE(\d{8})/i);
-  return m ? `00${m[1]}` : null;
-}
-
-async function gdcFetch(board, gdcUic) {
-  const key = `${board}:${gdcUic}`;
-  const cached = gdcCache.get(key);
-  if (cached && Date.now() - cached.at < GDC_TTL) return cached.data;
-
-  const url = `${GDC_BASE}/${board}/${encodeURIComponent(gdcUic)}`;
-  const r = await fetch(url, {
-    headers: {
-      "Accept": "application/json",
-      "User-Agent": "Mozilla/5.0 Trajets-HDF/2.5"
-    }
-  });
-
-  if (!r.ok) {
-    const err = new Error(`Gares & Connexions: ${r.status}`);
-    err.status = r.status;
-    throw err;
-  }
-
-  const data = await r.json();
-  gdcCache.set(key, { at: Date.now(), data });
-  return data;
-}
-
-function gdcTrackIndex(rows) {
-  const map = new Map();
-  for (const item of Array.isArray(rows) ? rows : []) {
-    const n = normalizeTrainNumber(item.trainNumber);
-    if (!n) continue;
-
-    map.set(n, {
-      track: item.platform?.track || null,
-      isTrackActive: Boolean(item.platform?.isTrackactive),
-      scheduledTime: item.scheduledTime || null,
-      actualTime: item.actualTime || null,
-      origin: item.traffic?.origin || null,
-      destination: item.traffic?.destination || null,
-      trainType: item.trainType || null
-    });
-  }
-  return map;
-}
-
-async function enrichBoardWithGdc(items, board, stopAreaId) {
-  const gdcUic = stopAreaToGdcUic(stopAreaId);
-  if (!gdcUic) return items;
-
+async function findTrackForTrain(stopId, board, trainNumber) {
+  const n = normalizeTrainNumber(trainNumber);
+  if (!stopId || !n) return null;
   try {
-    const rows = await gdcFetch(board, gdcUic);
-    const byTrain = gdcTrackIndex(rows);
-
-    return items.map(item => {
-      const trainNumber = normalizeTrainNumber(item.label || item.headsign);
-      const match = byTrain.get(trainNumber);
-      if (!match) return item;
-
-      return {
-        ...item,
-        platform: match.track || item.platform || null,
-        platformActive: match.isTrackActive,
-        gdc: match
-      };
-    });
-  } catch (e) {
-    console.warn("Gares & Connexions indisponible:", e.message);
-    return items;
+    const rows = await gdcFetch(board, stopId);
+    const row = rows.find(r => normalizeTrainNumber(r.trainNumber) === n);
+    if (!row) return null;
+    return {
+      track: row.platform?.track || null,
+      active: Boolean(row.platform?.isTrackactive)
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -590,7 +674,8 @@ app.get("/api/gdc-test", async (req, res) => {
 app.get("/api/status", (req, res) => {
   res.json({
     tokenConfigured: Boolean(TOKEN),
-    busSource: "GTFS TER Hauts-de-France"
+    busSource: "GTFS TER Hauts-de-France",
+    platformSource: "SNCF Gares & Connexions public"
   });
 });
 
