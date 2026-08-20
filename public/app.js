@@ -113,56 +113,6 @@ function renderBoard(){
 }
 
 
-function gdcUicFromStopArea(stopArea) {
-  const m = String(stopArea || "").match(/OCE(\d{8})/i);
-  return m ? `00${m[1]}` : null;
-}
-function normalizeTrainNo(v) {
-  const m = String(v || "").match(/\b(\d{4,6})\b/);
-  return m ? m[1] : String(v || "").replace(/\D/g,"");
-}
-async function fetchGdcInBrowser(mode, stopArea) {
-  const uic = gdcUicFromStopArea(stopArea);
-  if (!uic) return [];
-  const board = mode === "departures" ? "Departures" : "Arrivals";
-  const url = `https://www.garesetconnexions.sncf/schedule-table/${board}/${uic}`;
-  try {
-    const r = await fetch(url, {
-      method: "GET",
-      mode: "cors",
-      credentials: "include",
-      headers: { "Accept": "application/json" }
-    });
-    if (!r.ok) return [];
-    const data = await r.json();
-    return Array.isArray(data) ? data : [];
-  } catch (e) {
-    console.warn("G&C navigateur non accessible (CORS/protection navigateur):", e);
-    return [];
-  }
-}
-function mergeGdcTracks(items, rows) {
-  const byNo = new Map();
-  for (const r of rows) {
-    const no = normalizeTrainNo(r.trainNumber);
-    if (no) byNo.set(no, r);
-  }
-  return items.map(item => {
-    if (item.transportType === "bus") return item;
-    const no = normalizeTrainNo(item.trainNumber || item.label || item.headsign);
-    const row = byNo.get(no);
-    if (!row) return item;
-    return {
-      ...item,
-      trainNumber: row.trainNumber || item.trainNumber || item.label,
-      platform: row.platform?.track || item.platform || null,
-      platformActive: Boolean(row.platform?.isTrackactive),
-      origin: row.traffic?.origin || item.origin || "",
-      direction: row.traffic?.destination || item.direction || "",
-      source: "gares-et-connexions-browser"
-    };
-  });
-}
 
 async function loadBoard(){
   if(!state.boardStation){setStatus($("board-status"),"Choisis une gare dans les propositions.",true);return;}
@@ -174,16 +124,9 @@ async function loadBoard(){
     const [tr,busr]=await Promise.all([fetch(`/api/${state.boardMode}?${trainQs}`),fetch(`/api/bus-board?${busQs}`)]);
     const trains=await tr.json(),buses=await busr.json();
     if(!tr.ok)throw new Error(trains.error||"Erreur SNCF");
-    let merged=[...(Array.isArray(trains)?trains:[]),...(Array.isArray(buses)?buses:[])];
-
-    // V2.7 : deuxième tentative depuis le navigateur lui-même.
-    const gdcRows = await fetchGdcInBrowser(state.boardMode, state.boardStation.id);
-    merged = mergeGdcTracks(merged, gdcRows);
-
-    state.boardData=merged.sort((a,b)=>(a.datetime||"").localeCompare(b.datetime||""));
-    const trackCount=state.boardData.filter(x=>x.platform).length;
-    setStatus($("board-status"),
-      `${state.boardData.length} circulation(s) affichée(s) • ${trackCount} voie(s) récupérée(s).`);
+    state.boardData=[...(Array.isArray(trains)?trains:[]),...(Array.isArray(buses)?buses:[])]
+      .sort((a,b)=>(a.datetime||"").localeCompare(b.datetime||""));
+    setStatus($("board-status"),`${state.boardData.length} circulation(s) affichée(s).`);
     renderBoard();
   }catch(e){setStatus($("board-status"),e.message,true);}
 }

@@ -1,14 +1,34 @@
-# Trajets HDF V2.7
+# Trajets HDF — V2.8 publique
 
-V2.7 ajoute une seconde tentative de récupération des voies SNCF Gares & Connexions directement depuis le navigateur.
+Version publique propre et stable.
 
-Le tableau indique désormais combien de voies ont réellement été récupérées :
-`X circulation(s) affichée(s) • Y voie(s) récupérée(s).`
+## Fonctions
+- recherche d'itinéraires SNCF ;
+- cars TER Hauts-de-France ;
+- tableaux Départs et Arrivées ;
+- numéro de train / ligne ;
+- temps réel lorsque fourni par l'API SNCF ;
+- favoris ;
+- PWA installable ;
+- interface mobile.
 
-Important : si le navigateur bloque l'appel cross-origin (CORS) ou si Gares & Connexions exige sa protection DataDome, Y restera à 0. Cela permet de diagnostiquer précisément le problème sans afficher de fausses voies.
+## Voies / quais
+La colonne Voie / Quai est conservée.
+Elle est renseignée uniquement lorsqu'une source publique utilisée par l'application fournit réellement cette information.
+Sinon, l'application affiche `—`.
 
-Installation :
-1. conserver/remettre `.env`
-2. `npm install`
-3. `npm start`
-4. ouvrir l'application et tester Départs > Arras
+Aucun accès Geopulse ou InPulse n'est utilisé.
+Aucun cookie ou jeton SNCF professionnel n'est nécessaire.
+
+## Sources
+- API SNCF publique ;
+- GTFS officiel TER Hauts-de-France.
+
+## Installation
+1. Copier `.env.example` vers `.env`
+2. Ajouter `SNCF_API_TOKEN=...`
+3. `npm install`
+4. `npm start`
+5. Ouvrir `http://localhost:3000`
+
+Cette version est celle recommandée pour GitHub et l'hébergement public.
