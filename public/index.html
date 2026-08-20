@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="brand-icon">🚆</div>
       <div>
-        <div class="brand-title">Trajets HDF <span>v2.8</span></div>
+        <div class="brand-title">Trajets HDF <span>v2.8.2</span></div>
         <div class="brand-sub">Horaires & temps réel – Hauts-de-France</div>
       </div>
     </div>
@@ -38,6 +38,10 @@
       <div class="side-card">
         <small>Ma gare</small>
         <strong id="side-station">Aucune gare</strong>
+      </div>
+      <div class="side-card favorite-side-card">
+        <small>★ Gares favorites</small>
+        <div id="board-favorites" class="sidebar-favorites"></div>
       </div>
 
       <div class="side-card">
@@ -68,8 +72,12 @@
         <section class="search-panel">
           <div class="field autocomplete">
             <label for="board-station">Gare</label>
-            <input id="board-station" autocomplete="off" placeholder="Ex. Arras">
+            <div class="station-input-row">
+              <input id="board-station" autocomplete="off" placeholder="Ex. Arras">
+              <button id="fav-board" class="board-fav-btn" type="button" title="Ajouter cette gare aux favoris">☆</button>
+            </div>
             <div id="board-station-list" class="suggestions"></div>
+            
           </div>
           <div class="field">
             <label for="board-date">Date</label>

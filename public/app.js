@@ -46,7 +46,55 @@ setupAutocomplete("from","from-list",s=>state.from=s);
 setupAutocomplete("to","to-list",s=>state.to=s);
 setupAutocomplete("board-station","board-station-list",s=>{
   state.boardStation=s;$("side-station").textContent=s.name;
+  updateBoardFavoriteButton();
 });
+
+
+
+// ----- V2.8.1 : gares favorites -----
+function getStationFavorites(){
+  try { return JSON.parse(localStorage.getItem("hdfStationFavorites") || "[]"); }
+  catch { return []; }
+}
+function saveStationFavorites(items){
+  localStorage.setItem("hdfStationFavorites", JSON.stringify(items));
+  renderBoardFavorites();
+  updateBoardFavoriteButton();
+}
+function toggleBoardFavorite(){
+  if(!state.boardStation) return;
+  const items=getStationFavorites();
+  const i=items.findIndex(x=>x.id===state.boardStation.id);
+  if(i>=0) items.splice(i,1);
+  else items.push({id:state.boardStation.id,name:state.boardStation.name});
+  saveStationFavorites(items);
+}
+function updateBoardFavoriteButton(){
+  const b=$("fav-board");
+  if(!b) return;
+  const saved=state.boardStation && getStationFavorites().some(x=>x.id===state.boardStation.id);
+  b.textContent=saved ? "★" : "☆";
+  b.classList.toggle("saved",!!saved);
+  b.title=saved ? "Retirer des favoris" : "Ajouter aux favoris";
+}
+function renderBoardFavorites(){
+  const box=$("board-favorites");
+  if(!box) return;
+  box.innerHTML=getStationFavorites().map(x =>
+    `<button class="board-favorite-chip" data-id="${escapeHtml(x.id)}" data-name="${escapeHtml(x.name)}">${escapeHtml(x.name)}</button>`
+  ).join("");
+}
+$("fav-board")?.addEventListener("click",toggleBoardFavorite);
+$("board-favorites")?.addEventListener("click",e=>{
+  const b=e.target.closest(".board-favorite-chip");
+  if(!b) return;
+  state.boardStation={id:b.dataset.id,name:b.dataset.name};
+  $("board-station").value=b.dataset.name;
+  $("side-station").textContent=b.dataset.name;
+  updateBoardFavoriteButton();
+  loadBoard();
+});
+renderBoardFavorites();
 
 document.querySelectorAll(".nav-btn").forEach(btn=>{
   btn.addEventListener("click",()=>{
@@ -88,10 +136,10 @@ function renderBoard(){
     const isBus=item.transportType==="bus";
     const target=state.boardMode==="departures"
       ? (item.direction||item.headsign||"—")
-      : (item.origin||item.headsign||item.direction||"—");
+      : (item.origin||item.direction||item.headsign||"—");
     const other=state.boardMode==="departures"
       ? (item.origin||"—")
-      : (item.direction||"—");
+      : (item.direction||item.headsign||"—");
     const mode=item.commercialMode||item.network||(isBus?"Car TER":"Train");
     const platform=item.platform
       ? `<span class="platform ${isBus?"bus":""}">${escapeHtml(item.platform)}</span>${item.platformActive?'<span class="track-ok">✓</span>':""}`

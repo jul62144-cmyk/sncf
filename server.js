@@ -239,6 +239,7 @@ app.get("/api/arrivals", async (req, res) => {
         datetime: mapStopDateTime(a.stop_date_time?.arrival_date_time),
         baseDatetime: mapStopDateTime(a.stop_date_time?.base_arrival_date_time),
         stop: a.stop_point?.name || "",
+        origin: info.direction || "",
         direction: info.direction || "",
         headsign: info.headsign || "",
         label: info.label || "",
