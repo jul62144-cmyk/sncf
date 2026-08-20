@@ -830,10 +830,82 @@ function secsToSncfDateTime(dateStr, secs) {
 }
 
 
+
+function mapSncfJourney(j, forcedType = null) {
+  const sections = (j.sections || []).map(s => ({
+    type: s.type,
+    mode: s.mode || null,
+    from: s.from?.name || s.from?.stop_point?.name || null,
+    to: s.to?.name || s.to?.stop_point?.name || null,
+    from_id: s.from?.id || s.from?.stop_point?.id || null,
+    to_id: s.to?.id || s.to?.stop_point?.id || null,
+    departure: s.departure_date_time || null,
+    arrival: s.arrival_date_time || null,
+    display: s.display_informations ? {
+      commercial_mode: s.display_informations.commercial_mode,
+      network: s.display_informations.network,
+      label: s.display_informations.label,
+      direction: s.display_informations.direction,
+      headsign: s.display_informations.headsign,
+      train_number: s.display_informations.headsign || s.display_informations.code || s.display_informations.label
+    } : null
+  }));
+
+  const publicSections = sections.filter(s => s.type === "public_transport");
+  const looksBus = publicSections.some(s => {
+    const d = s.display || {};
+    const txt = `${s.mode || ""} ${d.commercial_mode || ""} ${d.network || ""}`.toLowerCase();
+    return /\b(bus|car|coach|autocar)\b/.test(txt);
+  });
+
+  return {
+    source: "sncf-api",
+    transportType: forcedType || (looksBus ? "bus" : "train"),
+    departure: j.departure_date_time,
+    arrival: j.arrival_date_time,
+    duration: j.duration,
+    transfers: j.nb_transfers,
+    status: j.status || null,
+    sections
+  };
+}
+
+async function fetchSncfCoachJourneys(from, to, datetime) {
+  const modes = ["physical_mode:Coach", "physical_mode:Bus"];
+  const all = [];
+
+  for (const mode of modes) {
+    try {
+      const data = await sncfGet("/journeys", {
+        from,
+        to,
+        datetime,
+        datetime_represents: "departure",
+        count: 8,
+        "allowed_id[]": mode
+      });
+      for (const j of (data.journeys || [])) all.push(mapSncfJourney(j, "bus"));
+    } catch (e) {
+      // Certains couvertures ne connaissent pas un des physical_mode.
+      console.warn(`SNCF coach fallback ${mode}:`, e.message);
+    }
+  }
+
+  const seen = new Set();
+  return all.filter(j => {
+    const key = `${j.departure}|${j.arrival}|${j.sections?.[0]?.from || ""}|${j.sections?.at(-1)?.to || ""}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 app.get("/api/bus-journeys", async (req, res) => {
   try {
     const fromName = String(req.query.fromName || "").trim();
     const toName = String(req.query.toName || "").trim();
+    const fromId = String(req.query.fromId || "").trim();
+    const toId = String(req.query.toId || "").trim();
     const date = String(req.query.date || "").trim();
     const time = String(req.query.time || "00:00").trim();
 
@@ -841,77 +913,111 @@ app.get("/api/bus-journeys", async (req, res) => {
       return res.status(400).json({ error: "Gares, date et heure obligatoires." });
     }
 
-    const gtfs = await loadGtfs();
-    const fromStops = matchCarStops(gtfs.stops, fromName);
-    const toStops = matchCarStops(gtfs.stops, toName);
+    let gtfsFound = [];
+    let gtfsError = null;
 
-    const fromIds = new Set(fromStops.map(s => s.stop_id));
-    const toIds = new Set(toStops.map(s => s.stop_id));
-    const minSecs = gtfsSecs(time + ":00");
+    try {
+      const gtfs = await loadGtfs();
+      const fromStops = matchCarStops(gtfs.stops, fromName);
+      const toStops = matchCarStops(gtfs.stops, toName);
 
-    const found = [];
+      const fromIds = new Set(fromStops.map(s => s.stop_id));
+      const toIds = new Set(toStops.map(s => s.stop_id));
+      const minSecs = gtfsSecs(time + ":00");
 
-    for (const trip of gtfs.trips) {
-      if (!serviceRuns(gtfs, trip.service_id, date)) continue;
+      for (const trip of gtfs.trips) {
+        if (!serviceRuns(gtfs, trip.service_id, date)) continue;
 
-      const route = gtfs.routeById.get(trip.route_id);
-      const times = gtfs.timesByTrip.get(trip.trip_id) || [];
-      if (!times.length) continue;
+        const route = gtfs.routeById.get(trip.route_id);
+        const times = gtfs.timesByTrip.get(trip.trip_id) || [];
+        if (!times.length) continue;
 
-      // Recognize coach journeys by route type OR OCECar stop points.
-      const routeType = String(route?.route_type || "");
-      const isBusType = ["3","700","701","702","704","705","710","712","715","717"].includes(routeType);
-      const hasCarStop = times.some(st => /OCECar/i.test(st.stop_id));
-      if (!isBusType && !hasCarStop) continue;
+        const routeType = String(route?.route_type || "");
+        const isBusType = ["3","700","701","702","704","705","710","712","715","717"].includes(routeType);
+        const hasCarStop = times.some(st => /OCECar/i.test(st.stop_id));
+        if (!isBusType && !hasCarStop) continue;
 
-      let fromIdx = -1;
-      let toIdx = -1;
+        let fromIdx = -1;
+        let toIdx = -1;
 
-      for (let i = 0; i < times.length; i++) {
-        if (fromIdx < 0 && fromIds.has(times[i].stop_id)) {
-          fromIdx = i;
-          continue;
+        for (let i = 0; i < times.length; i++) {
+          if (fromIdx < 0 && fromIds.has(times[i].stop_id)) {
+            fromIdx = i;
+            continue;
+          }
+          if (fromIdx >= 0 && i > fromIdx && toIds.has(times[i].stop_id)) {
+            toIdx = i;
+            break;
+          }
         }
-        if (fromIdx >= 0 && i > fromIdx && toIds.has(times[i].stop_id)) {
-          toIdx = i;
-          break;
-        }
-      }
 
-      if (fromIdx < 0 || toIdx < 0) continue;
+        if (fromIdx < 0 || toIdx < 0) continue;
 
-      const dep = gtfsSecs(times[fromIdx].departure_time);
-      const arr = gtfsSecs(times[toIdx].arrival_time);
-      if (dep < minSecs - 60) continue;
+        const dep = gtfsSecs(times[fromIdx].departure_time);
+        const arr = gtfsSecs(times[toIdx].arrival_time);
+        if (dep < minSecs - 60) continue;
 
-      found.push({
-        source: "ter-hdf-gtfs",
-        transportType: "bus",
-        departure: secsToSncfDateTime(date, dep),
-        arrival: secsToSncfDateTime(date, arr),
-        duration: Math.max(0, arr - dep),
-        transfers: 0,
-        status: null,
-        sections: [{
-          type: "public_transport",
-          mode: "bus",
-          from: gtfs.stopById.get(times[fromIdx].stop_id)?.stop_name || fromName,
-          to: gtfs.stopById.get(times[toIdx].stop_id)?.stop_name || toName,
+        gtfsFound.push({
+          source: "ter-hdf-gtfs",
+          transportType: "bus",
           departure: secsToSncfDateTime(date, dep),
           arrival: secsToSncfDateTime(date, arr),
-          display: {
-            commercial_mode: "Car TER",
-            network: "TER Hauts-de-France",
-            label: route?.route_short_name || route?.route_long_name || trip.trip_short_name || "",
-            direction: trip.trip_headsign || gtfs.stopById.get(times[toIdx].stop_id)?.stop_name || "",
-            headsign: trip.trip_headsign || ""
-          }
-        }]
-      });
+          duration: Math.max(0, arr - dep),
+          transfers: 0,
+          status: null,
+          sections: [{
+            type: "public_transport",
+            mode: "bus",
+            from: gtfs.stopById.get(times[fromIdx].stop_id)?.stop_name || fromName,
+            to: gtfs.stopById.get(times[toIdx].stop_id)?.stop_name || toName,
+            departure: secsToSncfDateTime(date, dep),
+            arrival: secsToSncfDateTime(date, arr),
+            display: {
+              commercial_mode: "Car TER",
+              network: "TER Hauts-de-France",
+              label: route?.route_short_name || route?.route_long_name || trip.trip_short_name || "",
+              direction: trip.trip_headsign || gtfs.stopById.get(times[toIdx].stop_id)?.stop_name || "",
+              headsign: trip.trip_headsign || ""
+            }
+          }]
+        });
+      }
+    } catch (e) {
+      gtfsError = e.message;
+      console.warn("GTFS cars indisponible:", e.message);
     }
 
-    found.sort((a,b) => a.departure.localeCompare(b.departure));
-    res.json(found.slice(0, 12));
+    // Sur Vercel, le téléchargement/décompression du GTFS peut être plus lent
+    // lors d'un cold start. On complète donc avec l'API SNCF Coach/Bus.
+    let sncfFound = [];
+    if (fromId && toId) {
+      try {
+        const dt = `${date.replaceAll("-", "")}T${time.replace(":", "")}00`;
+        sncfFound = await fetchSncfCoachJourneys(fromId, toId, dt);
+      } catch (e) {
+        console.warn("Fallback cars SNCF indisponible:", e.message);
+      }
+    }
+
+    const merged = [...gtfsFound, ...sncfFound]
+      .sort((a,b) => (a.departure || "").localeCompare(b.departure || ""));
+
+    const seen = new Set();
+    const deduped = merged.filter(j => {
+      const key = `${j.departure}|${j.arrival}|${j.sections?.[0]?.from || ""}|${j.sections?.at(-1)?.to || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    res.json({
+      journeys: deduped.slice(0, 16),
+      diagnostics: {
+        gtfsCount: gtfsFound.length,
+        sncfCoachCount: sncfFound.length,
+        gtfsError
+      }
+    });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
