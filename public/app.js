@@ -142,7 +142,7 @@ function renderBoard(){
       : (item.direction||item.headsign||"—");
     const mode=item.commercialMode||item.network||(isBus?"Car TER":"Train");
     const platform=item.platform
-      ? `<span class="platform ${isBus?"bus":""}">${escapeHtml(item.platform)}</span>${item.platformActive?'<span class="track-ok">✓</span>':""}`
+      ? `<span class="platform ${isBus?"bus":""}">${escapeHtml(item.platform)}</span>${item.tchoo?'<span class="platform-label">Tchoo</span>':""}`
       : `<span class="subtle">—</span>`;
     return `<tr>
       <td class="time-cell">${fmt(item.datetime)}</td>

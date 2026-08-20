@@ -212,7 +212,7 @@ app.get("/api/departures", async (req, res) => {
       };
     });
 
-    res.json(items);
+    res.json(await enrichWithTchoo(items, stopArea));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -255,9 +255,205 @@ app.get("/api/arrivals", async (req, res) => {
       };
     });
 
-    res.json(items);
+    res.json(await enrichWithTchoo(items, stopArea));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
+  }
+});
+
+
+// -----------------------
+// Carto Tchoo - tableau de gare public (voies)
+// Le frontend Carto Tchoo utilise:
+// https://api.tchoo.net/api/carto.php?action=deparr&uic=<UIC>
+// -----------------------
+const TCHOO_API = "https://api.tchoo.net/api/carto.php";
+const tchooCache = new Map();
+const TCHOO_TTL = 30 * 1000;
+
+function stopAreaToOceUic(stopArea) {
+  const m = String(stopArea || "").match(/OCE(\d{8})/i);
+  return m ? m[1] : null;
+}
+
+function normalizeTrainNumberTchoo(v) {
+  const s = String(v ?? "").trim();
+  const m = s.match(/\b(\d{4,6})\b/);
+  return m ? m[1] : "";
+}
+
+function firstDefined(obj, names) {
+  for (const n of names) {
+    if (obj && obj[n] !== undefined && obj[n] !== null && obj[n] !== "") return obj[n];
+  }
+  return null;
+}
+
+function pickPlatform(obj) {
+  if (!obj || typeof obj !== "object") return null;
+
+  const direct = firstDefined(obj, [
+    "voie", "platform", "track", "quai", "voie_depart", "voie_arrivee",
+    "voieDepart", "voieArrivee", "numero_voie", "numeroVoie"
+  ]);
+
+  if (typeof direct === "string" || typeof direct === "number") {
+    const s = String(direct).trim();
+    if (s && s.length <= 8) return s;
+  }
+
+  if (direct && typeof direct === "object") {
+    const nested = firstDefined(direct, [
+      "numero", "number", "track", "voie", "platform", "libelle",
+      "voieCommerciale", "voiePrevi"
+    ]);
+    if (nested !== null) return String(nested).trim();
+  }
+
+  return null;
+}
+
+function looksLikeTrainObject(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return false;
+  const number = firstDefined(obj, [
+    "numero", "trainNumber", "numeroTrain", "numTrain", "num",
+    "train_number", "numero_course", "numeroCourse"
+  ]);
+  return Boolean(normalizeTrainNumberTchoo(number));
+}
+
+function collectTchooTrainObjects(value, out = [], depth = 0) {
+  if (depth > 8 || value == null) return out;
+  if (Array.isArray(value)) {
+    for (const item of value) collectTchooTrainObjects(item, out, depth + 1);
+    return out;
+  }
+  if (typeof value !== "object") return out;
+
+  if (looksLikeTrainObject(value)) out.push(value);
+  for (const v of Object.values(value)) {
+    if (v && typeof v === "object") collectTchooTrainObjects(v, out, depth + 1);
+  }
+  return out;
+}
+
+function normalizeTchooObject(obj) {
+  const number = normalizeTrainNumberTchoo(firstDefined(obj, [
+    "numero", "trainNumber", "numeroTrain", "numTrain", "num",
+    "train_number", "numero_course", "numeroCourse"
+  ]));
+  if (!number) return null;
+
+  const platform = pickPlatform(obj);
+
+  const origin = firstDefined(obj, [
+    "origine", "origin", "depart", "gareOrigine", "libelleOrigine"
+  ]);
+  const destination = firstDefined(obj, [
+    "destination", "fin", "terminus", "gareDestination", "libelleDestination"
+  ]);
+  const time = firstDefined(obj, [
+    "heure", "time", "departure", "arrival", "heureDepart",
+    "heureArrivee", "dateHeure", "datetime"
+  ]);
+
+  return {
+    trainNumber: number,
+    platform: platform || null,
+    origin: typeof origin === "string" ? origin : null,
+    destination: typeof destination === "string" ? destination : null,
+    time: typeof time === "string" ? time : null
+  };
+}
+
+async function fetchTchooStation(stopArea) {
+  const uic = stopAreaToOceUic(stopArea) || String(stopArea || "").replace(/\D/g, "");
+  if (!/^\d{8}$/.test(uic)) return [];
+
+  const cached = tchooCache.get(uic);
+  if (cached && Date.now() - cached.at < TCHOO_TTL) return cached.rows;
+
+  const url = `${TCHOO_API}?action=deparr&uic=${encodeURIComponent(uic)}`;
+  const r = await fetch(url, {
+    headers: {
+      "Accept": "application/json, text/plain, */*",
+      "User-Agent": "Mozilla/5.0 (compatible; Trajets-HDF/2.9)",
+      "Referer": "https://carto.tchoo.net/"
+    }
+  });
+
+  if (!r.ok) throw new Error(`Carto Tchoo HTTP ${r.status}`);
+
+  const contentType = r.headers.get("content-type") || "";
+  let data;
+  if (contentType.includes("json")) {
+    data = await r.json();
+  } else {
+    const txt = await r.text();
+    try { data = JSON.parse(txt); }
+    catch { throw new Error("Réponse Carto Tchoo non JSON"); }
+  }
+
+  const objects = collectTchooTrainObjects(data);
+  const rows = objects.map(normalizeTchooObject).filter(Boolean);
+
+  // Deduplicate by train/platform.
+  const seen = new Set();
+  const deduped = rows.filter(row => {
+    const k = `${row.trainNumber}|${row.platform || ""}`;
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
+
+  tchooCache.set(uic, { at: Date.now(), rows: deduped });
+  return deduped;
+}
+
+async function enrichWithTchoo(items, stopArea) {
+  try {
+    const rows = await fetchTchooStation(stopArea);
+    const byTrain = new Map();
+
+    for (const r of rows) {
+      // Prefer a row that actually contains a platform.
+      if (!byTrain.has(r.trainNumber) || r.platform) byTrain.set(r.trainNumber, r);
+    }
+
+    return items.map(item => {
+      if (item.transportType === "bus") return item;
+      const n = normalizeTrainNumberTchoo(
+        item.trainNumber || item.label || item.headsign
+      );
+      const t = byTrain.get(n);
+      if (!t) return item;
+
+      return {
+        ...item,
+        trainNumber: n || item.trainNumber,
+        platform: t.platform || item.platform || null,
+        origin: t.origin || item.origin || "",
+        direction: t.destination || item.direction || "",
+        tchoo: Boolean(t.platform)
+      };
+    });
+  } catch (e) {
+    console.warn("Carto Tchoo indisponible:", e.message);
+    return items;
+  }
+}
+
+app.get("/api/tchoo-test", async (req, res) => {
+  try {
+    const stopArea = String(req.query.stopArea || "");
+    const rows = await fetchTchooStation(stopArea);
+    res.json({
+      count: rows.length,
+      withPlatform: rows.filter(r => r.platform).length,
+      sample: rows.filter(r => r.platform).slice(0, 10)
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 });
 
