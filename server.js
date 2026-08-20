@@ -1,7 +1,9 @@
 require("dotenv").config();
 const express = require("express");
 const path = require("path");
+const fs = require("fs");
 const AdmZip = require("adm-zip");
+const { Redis } = require("@upstash/redis");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -263,19 +265,17 @@ app.get("/api/arrivals", async (req, res) => {
 
 
 // -----------------------
-// Historique local des voies
-// Mémorise les voies OFFICIELLES observées par gare + numéro de train.
-// Les prévisions historiques restent explicitement marquées "estimée".
+// Historique persistant des voies — V2.9.4 Vercel
+//
+// Sur Vercel : stockage Upstash Redis (persistant entre les exécutions).
+// En local : repli sur platform-history.json si Redis n'est pas configuré.
 // -----------------------
 const PLATFORM_HISTORY_FILE = path.join(__dirname, "platform-history.json");
 const PLATFORM_HISTORY_MAX_DAYS = 90;
 const PLATFORM_HISTORY_MIN_OBS = 2;
 const PLATFORM_HISTORY_MIN_CONFIDENCE = 60;
+const PLATFORM_HISTORY_HASH = "trajets-hdf:platform-history:v1";
 
-const AUTO_COLLECTION_INTERVAL_MS = 5 * 60 * 1000;
-
-// Principales gares HDF suivies automatiquement.
-// Format UIC OCE 8 chiffres.
 const AUTO_COLLECTION_STATIONS = [
   { name: "Arras", uic: "87342014" },
   { name: "Lens", uic: "87345009" },
@@ -291,35 +291,28 @@ const AUTO_COLLECTION_STATIONS = [
   { name: "Saint-Quentin", uic: "87296004" }
 ];
 
-let autoCollectionRunning = false;
-let autoCollectionLastRun = null;
-let autoCollectionStats = {
-  stations: 0,
-  officialPlatformsSeen: 0,
-  errors: 0
-};
+const redisConfigured = Boolean(
+  (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) ||
+  (process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN)
+);
 
+let redis = null;
+if (redisConfigured) {
+  redis = new Redis({
+    url: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN
+  });
+}
 
-let platformHistory = {};
-
-function loadPlatformHistory() {
+let localPlatformHistory = {};
+if (!redisConfigured) {
   try {
     if (fs.existsSync(PLATFORM_HISTORY_FILE)) {
       const parsed = JSON.parse(fs.readFileSync(PLATFORM_HISTORY_FILE, "utf8"));
-      if (parsed && typeof parsed === "object") platformHistory = parsed;
+      if (parsed && typeof parsed === "object") localPlatformHistory = parsed;
     }
   } catch (e) {
-    console.warn("Historique voies illisible:", e.message);
-    platformHistory = {};
-  }
-}
-loadPlatformHistory();
-
-function savePlatformHistory() {
-  try {
-    fs.writeFileSync(PLATFORM_HISTORY_FILE, JSON.stringify(platformHistory, null, 2), "utf8");
-  } catch (e) {
-    console.warn("Impossible d'enregistrer l'historique voies:", e.message);
+    console.warn("Historique local voies illisible:", e.message);
   }
 }
 
@@ -328,7 +321,7 @@ function historyKey(uic, trainNumber) {
 }
 
 function pruneHistoryEntry(entry) {
-  if (!entry || !Array.isArray(entry.observations)) return entry;
+  if (!entry || !Array.isArray(entry.observations)) return { observations: [] };
   const cutoff = Date.now() - PLATFORM_HISTORY_MAX_DAYS * 86400000;
   entry.observations = entry.observations.filter(o => {
     const t = Date.parse(o.at || "");
@@ -337,15 +330,43 @@ function pruneHistoryEntry(entry) {
   return entry;
 }
 
-function rememberOfficialPlatform(uic, trainNumber, platform) {
+async function historyGetEntry(key) {
+  if (redis) {
+    try {
+      const value = await redis.hget(PLATFORM_HISTORY_HASH, key);
+      if (!value) return { observations: [] };
+      if (typeof value === "string") return pruneHistoryEntry(JSON.parse(value));
+      return pruneHistoryEntry(value);
+    } catch (e) {
+      console.warn("Lecture Redis historique voies:", e.message);
+      return { observations: [] };
+    }
+  }
+  return pruneHistoryEntry(localPlatformHistory[key] || { observations: [] });
+}
+
+async function historySetEntry(key, entry) {
+  if (redis) {
+    await redis.hset(PLATFORM_HISTORY_HASH, { [key]: JSON.stringify(entry) });
+    return;
+  }
+  localPlatformHistory[key] = entry;
+  try {
+    fs.writeFileSync(PLATFORM_HISTORY_FILE, JSON.stringify(localPlatformHistory, null, 2), "utf8");
+  } catch (e) {
+    console.warn("Enregistrement historique local voies:", e.message);
+  }
+}
+
+async function rememberOfficialPlatform(uic, trainNumber, platform) {
   if (!uic || !trainNumber || !platform) return;
   const key = historyKey(uic, trainNumber);
   const now = new Date().toISOString();
-  const entry = pruneHistoryEntry(platformHistory[key] || { observations: [] });
   const today = now.slice(0, 10);
+  const entry = await historyGetEntry(key);
 
-  // Une observation par jour suffit: évite de surpondérer le cache 30 s.
-  const sameDay = entry.observations.find(o => String(o.at || "").slice(0,10) === today);
+  // Une observation par jour et par train/gare pour ne pas surpondérer les rafraîchissements.
+  const sameDay = entry.observations.find(o => String(o.at || "").slice(0, 10) === today);
   if (sameDay) {
     sameDay.platform = String(platform);
     sameDay.at = now;
@@ -353,12 +374,11 @@ function rememberOfficialPlatform(uic, trainNumber, platform) {
     entry.observations.push({ platform: String(platform), at: now });
   }
 
-  platformHistory[key] = entry;
+  await historySetEntry(key, pruneHistoryEntry(entry));
 }
 
-function getHistoricalPlatform(uic, trainNumber) {
-  const key = historyKey(uic, trainNumber);
-  const entry = pruneHistoryEntry(platformHistory[key]);
+async function getHistoricalPlatform(uic, trainNumber) {
+  const entry = await historyGetEntry(historyKey(uic, trainNumber));
   if (!entry || entry.observations.length < PLATFORM_HISTORY_MIN_OBS) return null;
 
   const counts = {};
@@ -377,6 +397,39 @@ function getHistoricalPlatform(uic, trainNumber) {
   if (confidence < PLATFORM_HISTORY_MIN_CONFIDENCE) return null;
   return { platform, confidence, observations: total };
 }
+
+async function getHistoryStats() {
+  if (redis) {
+    try {
+      const entries = await redis.hlen(PLATFORM_HISTORY_HASH);
+      return {
+        storage: "upstash-redis",
+        persistent: true,
+        historyEntries: Number(entries || 0)
+      };
+    } catch (e) {
+      return {
+        storage: "upstash-redis",
+        persistent: true,
+        error: e.message
+      };
+    }
+  }
+
+  const entries = Object.keys(localPlatformHistory).length;
+  const observations = Object.values(localPlatformHistory).reduce(
+    (sum, e) => sum + (Array.isArray(e?.observations) ? e.observations.length : 0),
+    0
+  );
+  return {
+    storage: "local-json",
+    persistent: false,
+    historyEntries: entries,
+    observations
+  };
+}
+
+let lastCollectionStats = null;
 
 // -----------------------
 // Carto Tchoo - voies publiques / estimées
@@ -488,14 +541,12 @@ async function fetchTchooStation(stopArea, board) {
   let rows = src.map(x => normalizeTchooTrain(x, board)).filter(Boolean);
 
   // Apprentissage: uniquement les voies officielles publiées dans train.platform.
-  let learned = false;
-  for (const r of rows) {
-    if (r.platform && !r.platformEstimated && !r.bus) {
-      rememberOfficialPlatform(uic, r.trainNumber, r.platform);
-      learned = true;
-    }
-  }
-  if (learned) savePlatformHistory();
+  // Sur Vercel elles sont persistées dans Redis.
+  await Promise.all(
+    rows
+      .filter(r => r.platform && !r.platformEstimated && !r.bus)
+      .map(r => rememberOfficialPlatform(uic, r.trainNumber, r.platform))
+  );
 
   // Carto Tchoo lui-même appelle guess_my_platform.php lorsqu'item.platform est absent.
   // On reproduit ce comportement, mais en marquant explicitement la donnée comme ESTIMÉE.
@@ -520,9 +571,9 @@ async function fetchTchooStation(stopArea, board) {
 
   // Dernier recours: historique local. Il faut au moins 2 jours d'observation
   // et 60 % de concordance pour afficher une estimation.
-  rows = rows.map(r => {
+  rows = await Promise.all(rows.map(async r => {
     if (r.platform || r.bus) return r;
-    const h = getHistoricalPlatform(uic, r.trainNumber);
+    const h = await getHistoricalPlatform(uic, r.trainNumber);
     if (!h) return r;
     return {
       ...r,
@@ -530,9 +581,9 @@ async function fetchTchooStation(stopArea, board) {
       platformEstimated: true,
       platformConfidence: h.confidence,
       platformObservations: h.observations,
-      platformSource: "local-history"
+      platformSource: "persistent-history"
     };
-  });
+  }));
 
   tchooCache.set(cacheKey, { at: Date.now(), rows });
   return rows;
@@ -549,47 +600,55 @@ async function collectStationHistory(station) {
       official += rows.filter(r => r.platform && !r.platformEstimated && !r.bus).length;
     } catch (e) {
       errors++;
-      console.warn(`Collecte auto ${station.name}/${board}:`, e.message);
+      console.warn(`Collecte ${station.name}/${board}:`, e.message);
     }
   }
 
   return { official, errors };
 }
 
-async function runAutoPlatformCollection() {
-  if (autoCollectionRunning) return;
-  autoCollectionRunning = true;
+async function runPlatformCollection() {
+  const stats = {
+    startedAt: new Date().toISOString(),
+    stations: 0,
+    officialPlatformsSeen: 0,
+    errors: 0
+  };
 
-  const stats = { stations: 0, officialPlatformsSeen: 0, errors: 0 };
+  for (const station of AUTO_COLLECTION_STATIONS) {
+    const r = await collectStationHistory(station);
+    stats.stations++;
+    stats.officialPlatformsSeen += r.official;
+    stats.errors += r.errors;
+
+    // Limite la pression sur Carto Tchoo.
+    await new Promise(resolve => setTimeout(resolve, 350));
+  }
+
+  stats.finishedAt = new Date().toISOString();
+  lastCollectionStats = stats;
+  return stats;
+}
+
+function cronAuthorized(req) {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return true; // pratique en local
+  return req.headers.authorization === `Bearer ${secret}`;
+}
+
+app.get("/api/collect-platforms", async (req, res) => {
+  if (!cronAuthorized(req)) {
+    return res.status(401).json({ error: "Non autorisé." });
+  }
 
   try {
-    for (const station of AUTO_COLLECTION_STATIONS) {
-      const r = await collectStationHistory(station);
-      stats.stations++;
-      stats.officialPlatformsSeen += r.official;
-      stats.errors += r.errors;
-
-      // Petite pause entre gares pour rester raisonnable avec la source publique.
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-  } finally {
-    autoCollectionLastRun = new Date().toISOString();
-    autoCollectionStats = stats;
-    autoCollectionRunning = false;
-    console.log(
-      `[Historique voies] collecte auto terminée: ${stats.stations} gares, ` +
-      `${stats.officialPlatformsSeen} voies officielles vues, ${stats.errors} erreur(s)`
-    );
+    const stats = await runPlatformCollection();
+    const history = await getHistoryStats();
+    res.json({ ok: true, stats, history });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-}
-
-function startAutoPlatformCollection() {
-  // Premier passage peu après le démarrage.
-  setTimeout(() => runAutoPlatformCollection().catch(() => {}), 3000);
-
-  // Puis toutes les 5 minutes tant que le serveur tourne.
-  setInterval(() => runAutoPlatformCollection().catch(() => {}), AUTO_COLLECTION_INTERVAL_MS);
-}
+});
 
 async function enrichWithTchoo(items, stopArea, board) {
   try {
@@ -906,21 +965,16 @@ app.get("/api/bus-board", async (req, res) => {
 
 
 
-app.get("/api/platform-history-status", (req, res) => {
-  const entries = Object.keys(platformHistory).length;
-  const observations = Object.values(platformHistory).reduce(
-    (sum, e) => sum + (Array.isArray(e?.observations) ? e.observations.length : 0),
-    0
-  );
-
+app.get("/api/platform-history-status", async (req, res) => {
+  const history = await getHistoryStats();
   res.json({
-    autoCollectionRunning,
-    autoCollectionLastRun,
-    intervalMinutes: AUTO_COLLECTION_INTERVAL_MS / 60000,
-    stations: AUTO_COLLECTION_STATIONS,
-    stats: autoCollectionStats,
-    historyEntries: entries,
-    observations
+    ...history,
+    vercel: Boolean(process.env.VERCEL),
+    cronRecommended: true,
+    cronPath: "/api/collect-platforms",
+    cronScheduleUTC: "0 16 * * *",
+    lastCollectionStats,
+    stations: AUTO_COLLECTION_STATIONS
   });
 });
 
@@ -932,9 +986,12 @@ app.get("/api/status", (req, res) => {
   });
 });
 
-startAutoPlatformCollection();
+if (require.main === module) {
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`);
+    console.log("Trains : API SNCF | Cars TER : GTFS officiel Hauts-de-France");
+    console.log(`Historique voies : ${redisConfigured ? "Upstash Redis" : "JSON local"}`);
+  });
+}
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Application SNCF Hauts-de-France : http://localhost:${PORT}`);
-  console.log("Trains : API SNCF | Cars TER : GTFS officiel Hauts-de-France");
-});
+module.exports = app;

@@ -1,6 +1,6 @@
 {
   "name": "trajet-sncf-hauts-de-france",
-  "version": "2.9.3",
+  "version": "2.9.4",
   "private": true,
   "description": "Planificateur de trajets SNCF pour les gares des Hauts-de-France",
   "main": "server.js",
@@ -13,6 +13,7 @@
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.21.1",
-    "adm-zip": "^0.5.16"
+    "adm-zip": "^0.5.16",
+    "@upstash/redis": "^1.35.3"
   }
 }

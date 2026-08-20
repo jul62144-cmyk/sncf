@@ -142,7 +142,7 @@ function renderBoard(){
       : (item.direction||item.headsign||"—");
     const mode=item.commercialMode||item.network||(isBus?"Car TER":"Train");
     const platform=item.platform
-      ? `<span class="platform ${isBus?"bus":""} ${item.platformEstimated?"estimated":""}">${escapeHtml(item.platform)}</span>${item.tchoo?`<span class="platform-label">${item.platformSource==="local-history"?`historique ${Math.round(item.platformConfidence||0)}%${item.platformObservations?` · ${item.platformObservations}j`:""}`:(item.platformEstimated?`estimée ${Math.round(item.platformConfidence||0)}%`:"officielle")}</span>`:""}`
+      ? `<span class="platform ${isBus?"bus":""} ${item.platformEstimated?"estimated":""}">${escapeHtml(item.platform)}</span>${item.tchoo?`<span class="platform-label">${item.platformSource==="persistent-history"?`historique ${Math.round(item.platformConfidence||0)}%${item.platformObservations?` · ${item.platformObservations}j`:""}`:(item.platformEstimated?`estimée ${Math.round(item.platformConfidence||0)}%`:"officielle")}</span>`:""}`
       : `<span class="subtle">—</span>`;
     return `<tr>
       <td class="time-cell">${fmt(item.datetime)}</td>
