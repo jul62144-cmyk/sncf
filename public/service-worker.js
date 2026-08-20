@@ -1,4 +1,4 @@
-const CACHE = "trajets-hdf-v2.9.4-vercel";
+const CACHE = "trajets-hdf-v2.9.5-vercel";
 const ASSETS = [
   "/",
   "/index.html",

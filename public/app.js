@@ -225,8 +225,12 @@ function renderJourneys(items){
       const d=s.display||{};
       const no=d.train_number||d.headsign||d.label||"";
       const name=j.transportType==="bus"?"Car TER":([d.commercial_mode,no].filter(Boolean).join(" "));
-      const depTrack=s.departure_platform?`Départ voie ${escapeHtml(s.departure_platform)}${s.departure_platform_active?" ✓":""}`:"";
-      const arrTrack=s.arrival_platform?`Arrivée voie ${escapeHtml(s.arrival_platform)}${s.arrival_platform_active?" ✓":""}`:"";
+      const depTrack=s.departure_platform
+        ? `Départ voie ${escapeHtml(s.departure_platform)}${s.departure_platform_active?" ✓":(s.departure_platform_estimated?` (estimée${s.departure_platform_confidence?` ${Math.round(s.departure_platform_confidence)}%`:""})`:"")}`
+        : "";
+      const arrTrack=s.arrival_platform
+        ? `Arrivée voie ${escapeHtml(s.arrival_platform)}${s.arrival_platform_active?" ✓":(s.arrival_platform_estimated?` (estimée${s.arrival_platform_confidence?` ${Math.round(s.arrival_platform_confidence)}%`:""})`:"")}`
+        : "";
       return `<div class="section">
         <div class="train">${escapeHtml(name)}</div>
         <div>${escapeHtml(s.from||"")} ${fmt(s.departure)} → ${escapeHtml(s.to||"")} ${fmt(s.arrival)}</div>
