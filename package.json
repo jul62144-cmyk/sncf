@@ -1,6 +1,6 @@
 {
   "name": "trajet-sncf-hauts-de-france",
-  "version": "2.13.0",
+  "version": "2.13.1",
   "private": true,
   "description": "Planificateur de trajets SNCF pour les gares des Hauts-de-France",
   "main": "server.js",
