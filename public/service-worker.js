@@ -1,9 +1,11 @@
-const CACHE = "trajets-hdf-v2.10-vercel";
+const CACHE = "trajets-hdf-v2.12-vercel";
 const ASSETS = [
   "/",
   "/index.html",
   "/style.css",
   "/app.js",
+  "/roster-index.json",
+  "/roster-taxis.json",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png"

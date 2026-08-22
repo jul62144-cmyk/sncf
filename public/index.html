@@ -16,7 +16,7 @@
     <div class="brand">
       <div class="brand-icon">🚆</div>
       <div>
-        <div class="brand-title">Trajets HDF <span>v2.10</span></div>
+        <div class="brand-title">Trajets HDF <span>v2.12</span></div>
         <div class="brand-sub">Horaires & temps réel – Hauts-de-France</div>
       </div>
     </div>
@@ -153,6 +153,37 @@
         <section id="results" class="results"></section>
       </section>
     </main>
+  </div>
+
+
+  <div id="roster-modal" class="roster-modal hidden" role="dialog" aria-modal="true" aria-labelledby="roster-modal-title">
+    <div class="roster-modal-card">
+      <div class="roster-modal-head">
+        <div>
+          <div class="roster-kicker">Roulement Orcades</div>
+          <h2 id="roster-modal-title">Train</h2>
+          <div id="roster-modal-subtitle" class="subtle"></div>
+        </div>
+        <button id="roster-modal-close" class="roster-close" type="button" aria-label="Fermer">×</button>
+      </div>
+      <div id="roster-match-tabs" class="roster-match-tabs"></div>
+      <div class="roster-viewer-toolbar">
+        <button id="roster-prev" type="button">← Précédente</button>
+        <span id="roster-match-info"></span>
+        <button id="roster-next" type="button">Suivante →</button>
+      </div>
+      <div id="roster-page-viewport" class="roster-page-viewport">
+        <div class="roster-page-inner">
+          <img id="roster-page-image" alt="Graphique du roulement Orcades">
+          <div id="roster-highlight" class="roster-highlight" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="roster-modal-foot">
+        <strong id="roster-js-label"></strong>
+        <span id="roster-page-label"></span>
+        <span>La ligne de la JS est surlignée sur le graphique.</span>
+      </div>
+    </div>
   </div>
 
   <script src="/app.js"></script>

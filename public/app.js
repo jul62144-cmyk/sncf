@@ -4,6 +4,233 @@ const state = { from:null, to:null, boardStation:null, boardMode:"departures", b
 const pad = n => String(n).padStart(2,"0");
 
 function escapeHtml(s){return String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
+
+let rosterIndexPromise=null;
+let rosterCurrentMatches=[];
+let rosterCurrentMatch=0;
+
+function normalizeRosterTrainNumber(v){
+  const s=String(v||"").toUpperCase().trim().replace(/^[SR]/,"").replace(/UM$/,"");
+  const m=s.match(/\b(\d{6})\b/);
+  return m?m[1]:"";
+}
+
+function loadRosterIndex(){
+  if(!rosterIndexPromise){
+    rosterIndexPromise=fetch("/roster-index.json",{cache:"force-cache"}).then(r=>{
+      if(!r.ok)throw new Error("Index du roulement indisponible");
+      return r.json();
+    });
+  }
+  return rosterIndexPromise;
+}
+
+let rosterTaxisPromise=null;
+
+function normalizePlace(v){
+  return String(v||"")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g," ")
+    .trim();
+}
+
+function loadRosterTaxis(){
+  if(!rosterTaxisPromise){
+    rosterTaxisPromise=fetch("/roster-taxis.json",{cache:"force-cache"}).then(r=>{
+      if(!r.ok)throw new Error("Taxis du roulement indisponibles");
+      return r.json();
+    });
+  }
+  return rosterTaxisPromise;
+}
+
+function rosterDateRuleApplies(r,dateStr){
+  if(!dateStr)return false;
+  const d=new Date(`${dateStr}T12:00:00Z`);
+  if(Number.isNaN(d.getTime()))return false;
+
+  if(dateStr<"2026-08-31"||dateStr>"2026-12-12")return false;
+
+  const dayCodes=["DI","LU","MA","ME","JE","VE","SA"];
+  const day=dayCodes[d.getUTCDay()];
+
+  if(Array.isArray(r.days)&&r.days.length&&!r.days.includes(day))return false;
+  if(Array.isArray(r.exceptDays)&&r.exceptDays.includes(day))return false;
+
+  const md=`${String(d.getUTCDate()).padStart(2,"0")}/${String(d.getUTCMonth()+1).padStart(2,"0")}`;
+  if(Array.isArray(r.exceptDates)&&r.exceptDates.includes(md))return false;
+
+  const toNumber=x=>{
+    if(!x)return null;
+    const m=String(x).match(/^(\d{1,2})\/(\d{1,2})$/);
+    return m?Number(m[2])*100+Number(m[1]):null;
+  };
+  const cur=(d.getUTCMonth()+1)*100+d.getUTCDate();
+  const until=toNumber(r.validUntil);
+  const from=toNumber(r.validFrom);
+
+  // Some Orcades variants are marked both "JQ xx/xx" and "AP yy/yy":
+  // they apply before the first boundary OR after the second.
+  if(until!=null&&from!=null){
+    if(!(cur<=until||cur>=from))return false;
+  }else{
+    if(until!=null&&cur>until)return false;
+    if(from!=null&&cur<from)return false;
+  }
+
+  return true;
+}
+
+function minuteToSncf(dateStr,minute){
+  const base=new Date(`${dateStr}T00:00:00Z`);
+  base.setUTCMinutes(Number(minute||0));
+  return `${base.getUTCFullYear()}${String(base.getUTCMonth()+1).padStart(2,"0")}${String(base.getUTCDate()).padStart(2,"0")}T${String(base.getUTCHours()).padStart(2,"0")}${String(base.getUTCMinutes()).padStart(2,"0")}00`;
+}
+
+function rosterTaxiJourneys(payload,fromName,toName,dateStr,timeStr){
+  const from=normalizePlace(fromName);
+  const to=normalizePlace(toName);
+  const [hh,mm]=String(timeStr||"00:00").split(":").map(Number);
+  const minStart=(Number.isFinite(hh)?hh:0)*60+(Number.isFinite(mm)?mm:0);
+
+  const rows=(payload?.taxis||[])
+    .filter(r=>normalizePlace(r.originName)===from&&normalizePlace(r.destinationName)===to)
+    .filter(r=>rosterDateRuleApplies(r,dateStr))
+    .filter(r=>Number(r.departureMinute)>=minStart)
+    .sort((a,b)=>a.departureMinute-b.departureMinute)
+    .slice(0,20);
+
+  return rows.map(r=>({
+    source:"orcades-roster",
+    transportType:"taxi",
+    rosterTaxi:true,
+    rosterJS:r.js,
+    rosterPage:r.page,
+    rosterY:r.y,
+    departure:minuteToSncf(dateStr,r.departureMinute),
+    arrival:minuteToSncf(dateStr,r.arrivalMinute),
+    duration:Math.max(0,(r.arrivalMinute-r.departureMinute)*60),
+    transfers:0,
+    status:null,
+    sections:[{
+      type:"public_transport",
+      mode:"taxi",
+      from:`${r.originName}${r.originRaw&&r.originRaw!==r.originCode?` (${r.originRaw})`:""}`,
+      to:`${r.destinationName}${r.destinationRaw&&r.destinationRaw!==r.destinationCode?` (${r.destinationRaw})`:""}`,
+      departure:minuteToSncf(dateStr,r.departureMinute),
+      arrival:minuteToSncf(dateStr,r.arrivalMinute),
+      display:{
+        commercial_mode:"Taxi",
+        network:"Roulement Orcades",
+        label:r.js,
+        direction:r.destinationName,
+        headsign:r.js,
+        train_number:""
+      }
+    }]
+  }));
+}
+
+function openRosterDirect(page,y,js){
+  rosterCurrentMatches=[{page:Number(page),y:Number(y),js:String(js||"")}];
+  rosterCurrentMatch=0;
+  $("roster-modal").classList.remove("hidden");
+  $("roster-modal-title").textContent=`JS ${js}`;
+  $("roster-modal-subtitle").textContent="Trajet Taxi du roulement Orcades";
+  renderRosterMatchTabs();
+  showRosterMatch(0);
+}
+
+async function openRosterForTrain(rawTrain){
+  const train=normalizeRosterTrainNumber(rawTrain);
+  if(!train)return;
+  $("roster-modal").classList.remove("hidden");
+  $("roster-modal-title").textContent=`Train ${train}`;
+  $("roster-modal-subtitle").textContent="Recherche de la journée de service…";
+  try{
+    const idx=await loadRosterIndex();
+    const matches=idx.lookup?.[train]||[];
+    rosterCurrentMatches=matches;
+    rosterCurrentMatch=0;
+    if(!matches.length){
+      $("roster-modal-subtitle").textContent="Aucune JS trouvée pour ce train dans le roulement intégré.";
+      $("roster-match-tabs").innerHTML="";
+      $("roster-match-info").textContent="";
+      $("roster-js-label").textContent="Non trouvé";
+      $("roster-page-label").textContent="";
+      $("roster-page-image").removeAttribute("src");
+      $("roster-highlight").style.display="none";
+      $("roster-prev").disabled=true;
+      $("roster-next").disabled=true;
+      return;
+    }
+    $("roster-modal-subtitle").textContent=`${matches.length} correspondance(s) • roulement ${idx.validFrom} → ${idx.validTo}`;
+    renderRosterMatchTabs();
+    showRosterMatch(0);
+  }catch(e){
+    $("roster-modal-subtitle").textContent=e.message;
+  }
+}
+
+function renderRosterMatchTabs(){
+  $("roster-match-tabs").innerHTML=rosterCurrentMatches.map((m,i)=>
+    `<button type="button" class="roster-match-tab ${i===rosterCurrentMatch?"active":""}" data-roster-i="${i}">${escapeHtml(m.js)} · p.${m.page}</button>`
+  ).join("");
+}
+
+function showRosterMatch(i){
+  if(!rosterCurrentMatches.length)return;
+  i=Math.max(0,Math.min(rosterCurrentMatches.length-1,i));
+  rosterCurrentMatch=i;
+  const m=rosterCurrentMatches[i];
+  renderRosterMatchTabs();
+  $("roster-match-info").textContent=`${i+1} / ${rosterCurrentMatches.length}`;
+  $("roster-js-label").textContent=`JS ${m.js}`;
+  $("roster-page-label").textContent=`Page ${m.page}`;
+  $("roster-prev").disabled=i===0;
+  $("roster-next").disabled=i===rosterCurrentMatches.length-1;
+
+  const img=$("roster-page-image");
+  const viewport=$("roster-page-viewport");
+  const highlight=$("roster-highlight");
+  highlight.style.display="block";
+  highlight.style.top=`${Math.max(0,m.y*100-3.7)}%`;
+
+  img.onload=()=>requestAnimationFrame(()=>{
+    viewport.scrollTop=Math.max(0,m.y*img.clientHeight-viewport.clientHeight/2);
+  });
+  img.src=`/roster-pages/page-${String(m.page).padStart(2,"0")}.webp`;
+  img.alt=`Roulement Orcades page ${m.page}, JS ${m.js}`;
+}
+
+function closeRosterModal(){$("roster-modal").classList.add("hidden");}
+$("roster-modal-close")?.addEventListener("click",closeRosterModal);
+$("roster-modal")?.addEventListener("click",e=>{if(e.target===$("roster-modal"))closeRosterModal();});
+$("roster-prev")?.addEventListener("click",()=>showRosterMatch(rosterCurrentMatch-1));
+$("roster-next")?.addEventListener("click",()=>showRosterMatch(rosterCurrentMatch+1));
+$("roster-match-tabs")?.addEventListener("click",e=>{
+  const b=e.target.closest("[data-roster-i]");
+  if(b)showRosterMatch(Number(b.dataset.rosterI));
+});
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape"&&!$("roster-modal")?.classList.contains("hidden"))closeRosterModal();
+});
+document.addEventListener("click",e=>{
+  const direct=e.target.closest("[data-roster-direct-page]");
+  if(direct){
+    e.preventDefault();
+    e.stopPropagation();
+    openRosterDirect(direct.dataset.rosterDirectPage,direct.dataset.rosterDirectY,direct.dataset.rosterDirectJs);
+    return;
+  }
+
+  const b=e.target.closest("[data-roster-train]");
+  if(!b)return;
+  e.preventDefault();
+  e.stopPropagation();
+  openRosterForTrain(b.dataset.rosterTrain);
+});
 function debounce(fn,ms=250){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn(...a),ms);};}
 function fmt(dt){if(!dt)return"";const m=dt.match(/T(\d{2})(\d{2})/);return m?`${m[1]}:${m[2]}`:dt;}
 function duration(sec){const h=Math.floor(sec/3600),m=Math.round((sec%3600)/60);return h?`${h} h ${pad(m)}`:`${m} min`;}
@@ -140,14 +367,18 @@ function renderBoard(){
     const other=state.boardMode==="departures"
       ? (item.origin||"—")
       : (item.direction||item.headsign||"—");
-    const mode=item.isW?"W / acheminement":(item.commercialMode||item.network||(isBus?"Car TER":"Train"));
+    const mode=item.isW?(item.wFuture?"W prévu / acheminement":"W / acheminement"):(item.commercialMode||item.network||(isBus?"Car TER":"Train"));
     const platform=item.platform
       ? `<span class="platform ${isBus?"bus":""} ${item.platformEstimated?"estimated":""}">${escapeHtml(item.platform)}</span>${item.tchoo?`<span class="platform-label">${item.platformSource==="persistent-history"?`historique ${Math.round(item.platformConfidence||0)}%${item.platformObservations?` · ${item.platformObservations}j`:""}`:(item.platformEstimated?`estimée ${Math.round(item.platformConfidence||0)}%`:"officielle")}</span>`:""}`
       : `<span class="subtle">—</span>`;
-    return `<tr>
+    const rosterTrain=normalizeRosterTrainNumber(trainNo);
+    return `<tr ${rosterTrain?`class="roster-click-row" data-roster-train="${escapeHtml(rosterTrain)}"`:""}>
       <td class="time-cell">${fmt(item.datetime)}</td>
       <td><span class="${st.cls}">${escapeHtml(st.text)}</span></td>
-      <td><span class="train-number">${escapeHtml(trainNo)}</span><span class="mode-tag ${isBus?"bus":""} ${item.isW?"w":""}">${escapeHtml(mode)}</span></td>
+      <td>${rosterTrain
+        ? `<button type="button" class="train-number roster-train-link" data-roster-train="${escapeHtml(rosterTrain)}" title="Voir la JS dans le roulement">${escapeHtml(trainNo)}</button>`
+        : `<span class="train-number">${escapeHtml(trainNo)}</span>`}
+        <span class="mode-tag ${isBus?"bus":""} ${item.isW?"w":""}">${escapeHtml(mode)}</span></td>
       <td><div class="destination">${escapeHtml(target)}</div></td>
       <td>${platform}</td>
       <td>${isBus?"CAR":escapeHtml((mode||"TRAIN").replace("TER HDF","TER"))}</td>
@@ -221,19 +452,29 @@ $("search").addEventListener("click",async()=>{
       date:$("date").value,
       time:$("time").value
     });
-    const [tr,br]=await Promise.all([fetch(`/api/journeys?${trainQs}`),fetch(`/api/bus-journeys?${busQs}`)]);
+    const [tr,br,taxiPayload]=await Promise.all([
+      fetch(`/api/journeys?${trainQs}`),
+      fetch(`/api/bus-journeys?${busQs}`),
+      loadRosterTaxis().catch(()=>({taxis:[]}))
+    ]);
     const trains=await tr.json(),busPayload=await br.json();
     if(!tr.ok)throw new Error(trains.error||"Erreur SNCF");
     const buses=Array.isArray(busPayload)?busPayload:[];
-    const data=[...(Array.isArray(trains)?trains:[]),...buses]
+    const rosterTaxis=rosterTaxiJourneys(
+      taxiPayload,
+      state.from.name,
+      state.to.name,
+      $("date").value,
+      $("time").value
+    );
+    const data=[...(Array.isArray(trains)?trains:[]),...buses,...rosterTaxis]
       .sort((a,b)=>(a.departure||"").localeCompare(b.departure||""));
     const busCount=buses.length;
-    const gtfsCount=Number(br.headers.get("X-Bus-GTFS-Count")||0);
-    const sncfBusCount=Number(br.headers.get("X-Bus-SNCF-Count")||0);
+    const taxiCount=rosterTaxis.length;
     const extra=busCount===0&&br.headers.get("X-Bus-GTFS-Error")
       ?" • Cars temporairement indisponibles"
       :"";
-    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER${extra}`);
+    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER • ${taxiCount} taxi(s) roulement${extra}`);
     renderJourneys(data);
   }catch(e){setStatus($("status"),e.message,true);}
 });
@@ -244,9 +485,11 @@ function renderJourneys(items){
     const details=sections.map(s=>{
       const d=s.display||{};
       const no=d.train_number||d.headsign||d.label||"";
-      const name=j.isW||j.transportType==="w"
-        ? `W ${no}`
-        : (j.transportType==="bus"?"Car TER":([d.commercial_mode,no].filter(Boolean).join(" ")));
+      const name=j.transportType==="taxi"
+        ? `Taxi roulement · JS ${escapeHtml(j.rosterJS||d.label||"")}`
+        : (j.isW||j.transportType==="w"
+          ? `W ${no}`
+          : (j.transportType==="bus"?"Car TER":([d.commercial_mode,no].filter(Boolean).join(" "))));
       const depTrack=s.departure_platform
         ? `Départ voie ${escapeHtml(s.departure_platform)}${s.departure_platform_active?" ✓":(s.departure_platform_estimated?` (estimée${s.departure_platform_confidence?` ${Math.round(s.departure_platform_confidence)}%`:""})`:"")}`
         : "";
@@ -254,17 +497,31 @@ function renderJourneys(items){
         ? `Arrivée voie ${escapeHtml(s.arrival_platform)}${s.arrival_platform_active?" ✓":(s.arrival_platform_estimated?` (estimée${s.arrival_platform_confidence?` ${Math.round(s.arrival_platform_confidence)}%`:""})`:"")}`
         : "";
       return `<div class="section">
-        <div class="train">${escapeHtml(name)}</div>
+        <div class="train">${normalizeRosterTrainNumber(no)
+          ? `<button type="button" class="roster-section-train" data-roster-train="${escapeHtml(normalizeRosterTrainNumber(no))}" title="Voir la JS dans le roulement">${escapeHtml(name)} · Voir roulement</button>`
+          : escapeHtml(name)}</div>
         <div>${escapeHtml(s.from||"")} ${fmt(s.departure)} → ${escapeHtml(s.to||"")} ${fmt(s.arrival)}</div>
         ${(depTrack||arrTrack)?`<div class="section-platform">${[depTrack,arrTrack].filter(Boolean).join(" • ")}</div>`:""}
       </div>`;
     }).join("");
+    const journeyTrain=j.transportType==="taxi"
+      ? ""
+      : (sections.map(s=>normalizeRosterTrainNumber(s.display?.train_number||s.display?.headsign||s.display?.label)).find(Boolean)||"");
     return `<article class="journey" data-i="${i}">
       <div class="journey-head">
         <div class="journey-time">${fmt(j.departure)}</div>
         <div><div class="journey-route">${escapeHtml(state.from?.name||"")} → ${escapeHtml(state.to?.name||"")}</div>
-          <div class="journey-meta">${duration(j.duration)} • ${j.transfers===0?"Direct":`${j.transfers} correspondance(s)`}</div></div>
-        <div class="journey-badge">${j.isW||j.transportType==="w"?"🚆 W / acheminement":(j.transportType==="bus"?"🚌 Car TER":"🚆 Train")}</div>
+          <div class="journey-meta">${duration(j.duration)} • ${j.transfers===0?"Direct":`${j.transfers} correspondance(s)`}${j.transportType==="taxi"?" • horaire issu du roulement":""}</div></div>
+        <div class="journey-actions">
+          <div class="journey-badge">${j.transportType==="taxi"
+            ?"🚕 Taxi roulement"
+            :(j.isW||j.transportType==="w"
+              ?(j.wFuture?"🚆 W prévu / acheminement":"🚆 W / acheminement")
+              :(j.transportType==="bus"?"🚌 Car TER":"🚆 Train"))}</div>
+          ${j.transportType==="taxi"
+            ?`<button type="button" class="roster-quick" data-roster-direct-page="${escapeHtml(j.rosterPage)}" data-roster-direct-y="${escapeHtml(j.rosterY)}" data-roster-direct-js="${escapeHtml(j.rosterJS)}">JS ${escapeHtml(j.rosterJS)} / Roulement</button>`
+            :(journeyTrain?`<button type="button" class="roster-quick" data-roster-train="${escapeHtml(journeyTrain)}">JS / Roulement</button>`:"")}
+        </div>
       </div>
       <div class="details">${details||"Détails non disponibles."}</div>
     </article>`;

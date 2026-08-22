@@ -91,7 +91,7 @@ app.get("/api/stations", async (req, res) => {
 
 app.get("/api/journeys", async (req, res) => {
   try {
-    const { from, to, datetime } = req.query;
+    const { from, to, datetime, fromName, toName } = req.query;
     if (!from || !to) return res.status(400).json({ error: "Départ et arrivée obligatoires." });
 
     // Train journeys from SNCF API.
@@ -177,7 +177,20 @@ app.get("/api/journeys", async (req, res) => {
       }
     }
 
-    res.json(journeys);
+    let wJourneys = [];
+    if (fromName && toName) {
+      try {
+        const tchooRows = await fetchTchooStation(from, "departures");
+        wJourneys = buildWJourneys(tchooRows, fromName, toName, datetime);
+      } catch (e) {
+        console.warn("Trains W Tchoo indisponibles:", e.message);
+      }
+    }
+
+    const merged = [...journeys, ...wJourneys]
+      .sort((a,b) => String(a.departure || "").localeCompare(String(b.departure || "")));
+
+    res.json(merged);
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -234,7 +247,7 @@ app.get("/api/departures", async (req, res) => {
       };
     });
 
-    res.json(await enrichWithTchoo(items, stopArea, "departures"));
+    res.json(await enrichWithTchoo(items, stopArea, "departures", datetime));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -277,7 +290,7 @@ app.get("/api/arrivals", async (req, res) => {
       };
     });
 
-    res.json(await enrichWithTchoo(items, stopArea, "arrivals"));
+    res.json(await enrichWithTchoo(items, stopArea, "arrivals", datetime));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -475,6 +488,106 @@ function normalizeTrainNumberTchoo(v) {
   return m ? m[1] : "";
 }
 
+function isWTrainNumber(v) {
+  const n = Number(normalizeTrainNumberTchoo(v));
+  return Number.isInteger(n) && n >= 700000 && n <= 799999;
+}
+
+function normalizePlaceName(v) {
+  return String(v || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+function tchooStepName(step) {
+  return String(
+    step?.localite || step?.gare || step?.station || step?.name || step?.libelle || ""
+  ).trim();
+}
+
+function tchooStepTime(step) {
+  return String(
+    step?.fin || step?.debut || step?.heure || step?.time ||
+    step?.arrival || step?.departure || ""
+  ).trim();
+}
+
+function referenceYmd(referenceDateTime) {
+  const ref = String(referenceDateTime || "");
+  let m = ref.match(/^(\d{8})T/);
+  if (m) return m[1];
+  m = ref.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}${m[2]}${m[3]}`;
+  const d = new Date();
+  return `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function combineDateAndClock(referenceDateTime, clock) {
+  if (!clock) return referenceDateTime || null;
+  const s = String(clock).trim();
+
+  if (/^\d{8}T\d{6}$/.test(s)) return s;
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) return s;
+
+  const hm = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (!hm) return referenceDateTime || null;
+
+  return `${referenceYmd(referenceDateTime)}T${String(hm[1]).padStart(2,"0")}${hm[2]}${hm[3] || "00"}`;
+}
+
+function sncfDateTimeToEpoch(s) {
+  const v = String(s || "");
+  let m = v.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
+  if (m) return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +m[6]);
+  m = v.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (m) return Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], +(m[6] || 0));
+  return NaN;
+}
+
+function wTiming(referenceDateTime, clock) {
+  const dt = combineDateAndClock(referenceDateTime, clock);
+  const t = sncfDateTimeToEpoch(dt);
+  if (!Number.isFinite(t)) return { datetime: dt, minutesAhead: null, future: null };
+  const now = Date.now();
+  const minutesAhead = Math.round((t - now) / 60000);
+  return {
+    datetime: dt,
+    minutesAhead,
+    future: minutesAhead > 0
+  };
+}
+
+function tchooWToBoardItem(row, board, referenceDateTime) {
+  const timing = wTiming(referenceDateTime, row.time);
+  return {
+    type: board === "arrivals" ? "arrival" : "departure",
+    source: "carto-tchoo",
+    transportType: "train",
+    datetime: timing.datetime,
+    baseDatetime: timing.datetime,
+    stop: "",
+    origin: row.origin || "",
+    direction: row.destination || "",
+    headsign: row.destination || row.origin || "",
+    label: row.trainNumber,
+    trainNumber: row.trainNumber,
+    commercialMode: "W",
+    network: "Acheminement",
+    status: null,
+    platform: row.platform || null,
+    platformEstimated: Boolean(row.platformEstimated),
+    platformConfidence: row.platformConfidence || null,
+    platformSource: row.platformSource || null,
+    platformObservations: row.platformObservations || null,
+    tchoo: Boolean(row.platform),
+    isW: true,
+    wFuture: timing.future,
+    wMinutesAhead: timing.minutesAhead
+  };
+}
+
 async function tchooGetJson(url) {
   const r = await fetch(url, {
     headers: {
@@ -516,16 +629,25 @@ function normalizeTchooTrain(item, board) {
   const trainNumber = normalizeTrainNumberTchoo(item?.num);
   if (!trainNumber) return null;
 
-  const steps = Array.isArray(item.etapes) ? item.etapes : [];
+  const rawSteps = Array.isArray(item.etapes) ? item.etapes : [];
+  const steps = rawSteps.map(s => ({
+    name: tchooStepName(s),
+    time: tchooStepTime(s)
+  })).filter(s => s.name);
+
   let origin = "";
   let destination = "";
 
   if (board === "departures") {
-    origin = item.localite || "";
-    destination = steps.length ? (steps[steps.length - 1]?.localite || "") : (item.localite || "");
+    origin = String(item.origine_localite || item.gare_origine || "").trim();
+    destination =
+      steps[steps.length - 1]?.name ||
+      String(item.localite || item.destination || "").trim();
   } else {
-    origin = item.localite || "";
-    destination = "";
+    origin =
+      steps[0]?.name ||
+      String(item.localite || item.origine_localite || "").trim();
+    destination = String(item.destination || "").trim();
   }
 
   return {
@@ -536,9 +658,13 @@ function normalizeTchooTrain(item, board) {
     platformSource: item.platform ? "tchoo-official" : null,
     origin,
     destination,
-    time: board === "departures" ? (item.fin || null) : (item.debut || null),
+    time: board === "departures"
+      ? (item.fin || item.debut || null)
+      : (item.debut || item.fin || null),
     bus: Number(item.bus || 0) === 1,
-    mode: item.origine || ""
+    mode: item.origine || "",
+    steps,
+    isW: isWTrainNumber(trainNumber)
   };
 }
 
@@ -670,13 +796,14 @@ app.get("/api/collect-platforms", async (req, res) => {
   }
 });
 
-async function enrichWithTchoo(items, stopArea, board) {
+async function enrichWithTchoo(items, stopArea, board, referenceDateTime = null) {
   try {
     const rows = await fetchTchooStation(stopArea, board);
     const byTrain = new Map(rows.map(r => [r.trainNumber, r]));
 
-    return items.map(item => {
+    const enriched = items.map(item => {
       if (item.transportType === "bus") return item;
+
       const n = normalizeTrainNumberTchoo(item.trainNumber || item.label || item.headsign);
       const t = byTrain.get(n);
       if (!t) return item;
@@ -691,14 +818,142 @@ async function enrichWithTchoo(items, stopArea, board) {
         platformObservations: t.platformObservations || null,
         origin: board === "arrivals" ? (t.origin || item.origin || "") : (item.origin || ""),
         direction: board === "departures" ? (t.destination || item.direction || "") : item.direction,
-        tchoo: Boolean(t.platform)
+        tchoo: Boolean(t.platform),
+        isW: isWTrainNumber(n)
       };
     });
+
+    const existing = new Set(
+      enriched
+        .map(x => normalizeTrainNumberTchoo(x.trainNumber || x.label || x.headsign))
+        .filter(Boolean)
+    );
+
+    const wOnly = rows
+      .filter(r => isWTrainNumber(r.trainNumber) && !r.bus && !existing.has(r.trainNumber))
+      .map(r => tchooWToBoardItem(r, board, referenceDateTime));
+
+    return [...enriched, ...wOnly]
+      .sort((a,b) => String(a.datetime || "").localeCompare(String(b.datetime || "")));
   } catch (e) {
     console.warn("Carto Tchoo indisponible:", e.message);
     return items;
   }
 }
+
+function buildWJourneys(rows, fromName, toName, referenceDateTime) {
+  const target = normalizePlaceName(toName);
+  const from = String(fromName || "").trim();
+
+  return rows
+    .filter(r => isWTrainNumber(r.trainNumber) && !r.bus)
+    .map(r => {
+      const steps = Array.isArray(r.steps) ? r.steps : [];
+      let targetStep = steps.find(s => normalizePlaceName(s.name) === target);
+
+      if (!targetStep && target) {
+        targetStep = steps.find(s => {
+          const n = normalizePlaceName(s.name);
+          return n && (n.includes(target) || target.includes(n));
+        });
+      }
+
+      const destinationMatches = normalizePlaceName(r.destination) === target;
+      if (!targetStep && !destinationMatches) return null;
+
+      const depTiming = wTiming(referenceDateTime, r.time);
+      const arrClock = targetStep?.time || (destinationMatches ? r.time : null);
+      const arr = combineDateAndClock(referenceDateTime, arrClock) || depTiming.datetime;
+
+      let duration = 0;
+      const depMs = sncfDateTimeToEpoch(depTiming.datetime);
+      const arrMs = sncfDateTimeToEpoch(arr);
+      if (Number.isFinite(depMs) && Number.isFinite(arrMs)) {
+        duration = Math.max(0, Math.round((arrMs - depMs) / 1000));
+      }
+
+      return {
+        source: "carto-tchoo",
+        transportType: "w",
+        isW: true,
+        wFuture: depTiming.future,
+        wMinutesAhead: depTiming.minutesAhead,
+        departure: depTiming.datetime,
+        arrival: arr,
+        duration,
+        transfers: 0,
+        status: null,
+        sections: [{
+          type: "public_transport",
+          mode: "train",
+          from,
+          to: targetStep?.name || toName,
+          departure: depTiming.datetime,
+          arrival: arr,
+          departure_platform: r.platform || null,
+          departure_platform_active: Boolean(r.platform && !r.platformEstimated),
+          departure_platform_estimated: Boolean(r.platformEstimated),
+          departure_platform_confidence: r.platformConfidence || null,
+          display: {
+            commercial_mode: "W",
+            network: "Acheminement",
+            label: r.trainNumber,
+            direction: r.destination || toName,
+            headsign: r.trainNumber,
+            train_number: r.trainNumber
+          }
+        }]
+      };
+    })
+    .filter(Boolean);
+}
+
+
+app.get("/api/w-scan", async (req, res) => {
+  try {
+    const stopArea = String(req.query.stopArea || "").trim();
+    const hours = Math.max(1, Math.min(24, Number(req.query.hours || 12)));
+    const reference = String(req.query.datetime || "").trim() || null;
+
+    if (!stopArea) return res.status(400).json({ error: "stopArea obligatoire." });
+
+    const rows = await fetchTchooStation(stopArea, "departures");
+    const allW = rows
+      .filter(r => isWTrainNumber(r.trainNumber) && !r.bus)
+      .map(r => {
+        const timing = wTiming(reference, r.time);
+        return {
+          trainNumber: r.trainNumber,
+          origin: r.origin || "",
+          destination: r.destination || "",
+          time: r.time || null,
+          datetime: timing.datetime,
+          minutesAhead: timing.minutesAhead,
+          future: timing.future,
+          platform: r.platform || null,
+          platformEstimated: Boolean(r.platformEstimated),
+          platformConfidence: r.platformConfidence || null,
+          steps: r.steps || []
+        };
+      });
+
+    const futureW = allW.filter(r =>
+      Number.isFinite(r.minutesAhead) &&
+      r.minutesAhead >= 0 &&
+      r.minutesAhead <= hours * 60
+    );
+
+    res.json({
+      countAllW: allW.length,
+      countFutureW: futureW.length,
+      horizonHours: hours,
+      futureW,
+      allW
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 
 app.get("/api/tchoo-test", async (req, res) => {
   try {
@@ -713,6 +968,8 @@ app.get("/api/tchoo-test", async (req, res) => {
       tchooEstimatedPlatforms: rows.filter(r => r.platformSource === "tchoo-estimate").length,
       historicalPlatforms: rows.filter(r => r.platformSource === "local-history").length,
       withPlatform: rows.filter(r => r.platform).length,
+      wTrains: rows.filter(r => isWTrainNumber(r.trainNumber)).length,
+      wSample: rows.filter(r => isWTrainNumber(r.trainNumber)).slice(0, 15),
       sample: rows.filter(r => r.platform).slice(0, 15)
     });
   } catch (e) {
