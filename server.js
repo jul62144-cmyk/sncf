@@ -182,6 +182,91 @@ app.get("/api/stations", async (req, res) => {
   }
 });
 
+
+function sncfDatePart(v) {
+  const m = String(v || "").match(/^(\d{8})T/);
+  return m ? m[1] : "";
+}
+
+function sncfTimeToSeconds(v) {
+  const m = String(v || "").match(/^\d{8}T(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return null;
+  return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+}
+
+function secondsUntilEndOfDay(datetime) {
+  const s = sncfTimeToSeconds(datetime);
+  if (s == null) return 86400;
+  return Math.max(60, 86400 - s);
+}
+
+function plusOneMinuteSncf(v) {
+  const s = String(v || "");
+  const m = s.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})$/);
+  if (!m) return s;
+  const d = new Date(Date.UTC(
+    Number(m[1]), Number(m[2]) - 1, Number(m[3]),
+    Number(m[4]), Number(m[5]), Number(m[6])
+  ));
+  d.setUTCMinutes(d.getUTCMinutes() + 1);
+  return `${d.getUTCFullYear()}${String(d.getUTCMonth()+1).padStart(2,"0")}${String(d.getUTCDate()).padStart(2,"0")}T${String(d.getUTCHours()).padStart(2,"0")}${String(d.getUTCMinutes()).padStart(2,"0")}${String(d.getUTCSeconds()).padStart(2,"0")}`;
+}
+
+async function fetchTrainJourneysUntilEndDay(from, to, datetime) {
+  const targetDate = sncfDatePart(datetime);
+  let cursor = datetime;
+  const all = [];
+  const seen = new Set();
+
+  // Navitia can cap the number of returned journeys even when a larger count
+  // is requested. Advance from the last departure until the end of the chosen day.
+  for (let pass = 0; pass < 30; pass++) {
+    if (sncfDatePart(cursor) !== targetDate) break;
+
+    const data = await sncfGet("/journeys", {
+      from,
+      to,
+      datetime: cursor,
+      datetime_represents: "departure",
+      count: 50,
+      "allowed_id[]": "physical_mode:Train"
+    });
+
+    const rows = (data.journeys || [])
+      .filter(j => sncfDatePart(j.departure_date_time) === targetDate)
+      .sort((a,b) => String(a.departure_date_time || "").localeCompare(String(b.departure_date_time || "")));
+
+    if (!rows.length) break;
+
+    for (const j of rows) {
+      const key = `${j.departure_date_time}|${j.arrival_date_time}|${j.duration}|${j.nb_transfers}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        all.push(j);
+      }
+    }
+
+    const lastDeparture = rows.at(-1)?.departure_date_time;
+    if (!lastDeparture) break;
+
+    const next = plusOneMinuteSncf(lastDeparture);
+    if (!next || next <= cursor || sncfDatePart(next) !== targetDate) break;
+    cursor = next;
+
+    // Stop after the final minute of the selected date.
+    const sec = sncfTimeToSeconds(cursor);
+    if (sec == null || sec >= 86399) break;
+
+    // If the API returned fewer than the requested batch, there is normally
+    // nothing else; one extra pass would only duplicate the last results.
+    if (rows.length < 50) break;
+  }
+
+  return all.sort((a,b) =>
+    String(a.departure_date_time || "").localeCompare(String(b.departure_date_time || ""))
+  );
+}
+
 app.get("/api/journeys", async (req, res) => {
   try {
     const { from, to, datetime, fromName, toName } = req.query;
@@ -193,17 +278,10 @@ app.get("/api/journeys", async (req, res) => {
       return res.json([]);
     }
 
-    // Train journeys from SNCF API.
-    const data = await sncfGet("/journeys", {
-      from,
-      to,
-      datetime,
-      datetime_represents: "departure",
-      count: 8,
-      "allowed_id[]": "physical_mode:Train"
-    });
+    // Train journeys from the selected time through 23:59 of the same day.
+    const journeyRows = await fetchTrainJourneysUntilEndDay(from, to, datetime);
 
-    const journeys = (data.journeys || []).map(j => ({
+    const journeys = journeyRows.map(j => ({
       source: "sncf-api",
       transportType: "train",
       departure: j.departure_date_time,
@@ -231,6 +309,16 @@ app.get("/api/journeys", async (req, res) => {
       }))
     }));
 
+    const tchooRequestCache = new Map();
+    const cachedTchoo = (stopArea, board) => {
+      if (!stopArea) return Promise.resolve([]);
+      const key = `${stopArea}|${board}`;
+      if (!tchooRequestCache.has(key)) {
+        tchooRequestCache.set(key, fetchTchooStation(stopArea, board).catch(() => []));
+      }
+      return tchooRequestCache.get(key);
+    };
+
     for (const journey of journeys) {
       for (const section of journey.sections) {
         if (section.type !== "public_transport" || !section.display) continue;
@@ -251,8 +339,8 @@ app.get("/api/journeys", async (req, res) => {
         if (journey.transportType !== "bus" && trainNumber) {
           try {
             const [depRows, arrRows] = await Promise.all([
-              section.from_id ? fetchTchooStation(section.from_id, "departures") : Promise.resolve([]),
-              section.to_id ? fetchTchooStation(section.to_id, "arrivals") : Promise.resolve([])
+              cachedTchoo(section.from_id, "departures"),
+              cachedTchoo(section.to_id, "arrivals")
             ]);
 
             const dep = depRows.find(r => r.trainNumber === trainNumber);
@@ -317,8 +405,8 @@ app.get("/api/departures", async (req, res) => {
 
     const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/departures`, {
       from_datetime: datetime,
-      duration: 7200,
-      count: 30,
+      duration: secondsUntilEndOfDay(datetime),
+      count: 250,
       depth: 3
     });
 
@@ -359,8 +447,8 @@ app.get("/api/arrivals", async (req, res) => {
 
     const data = await sncfGet(`/stop_areas/${encodeURIComponent(stopArea)}/arrivals`, {
       from_datetime: datetime,
-      duration: 7200,
-      count: 30,
+      duration: secondsUntilEndOfDay(datetime),
+      count: 250,
       depth: 3
     });
 
@@ -1266,7 +1354,7 @@ async function fetchSncfCoachJourneys(from, to, datetime) {
         to,
         datetime,
         datetime_represents: "departure",
-        count: 8,
+        count: 100,
         "allowed_id[]": mode
       });
       for (const j of (data.journeys || [])) all.push(mapSncfJourney(j, "bus"));
@@ -1340,7 +1428,7 @@ app.get("/api/bus-journeys", async (req, res) => {
 
         const dep = gtfsSecs(times[fromIdx].departure_time);
         const arr = gtfsSecs(times[toIdx].arrival_time);
-        if (dep < minSecs - 60) continue;
+        if (dep < minSecs - 60 || dep >= 86400) continue;
 
         gtfsFound.push({
           source: "ter-hdf-gtfs",
@@ -1401,7 +1489,7 @@ app.get("/api/bus-journeys", async (req, res) => {
     res.set("X-Bus-GTFS-Count", String(gtfsFound.length));
     res.set("X-Bus-SNCF-Count", String(sncfFound.length));
     if (gtfsError) res.set("X-Bus-GTFS-Error", encodeURIComponent(gtfsError).slice(0, 500));
-    res.json(deduped.slice(0, 16));
+    res.json(deduped);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
@@ -1444,7 +1532,7 @@ app.get("/api/bus-board", async (req, res) => {
       const st = times[idx];
       const eventTime = mode === "arrivals" ? st.arrival_time : st.departure_time;
       const eventSecs = gtfsSecs(eventTime);
-      if (eventSecs < minSecs - 60) continue;
+      if (eventSecs < minSecs - 60 || eventSecs >= 86400) continue;
 
       const first = times[0], last = times[times.length - 1];
       const origin = gtfs.stopById.get(first.stop_id)?.stop_name || "";
@@ -1467,7 +1555,7 @@ app.get("/api/bus-board", async (req, res) => {
     }
 
     out.sort((a,b) => a.datetime.localeCompare(b.datetime));
-    res.json(out.slice(0, 30));
+    res.json(out);
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
