@@ -56,6 +56,21 @@ app.get("/api/stations", async (req, res) => {
     const q = String(req.query.q || "").trim();
     if (q.length < 2) return res.json([]);
 
+    const norm = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+    const nq = norm(q);
+    const operational = [
+      { id: "op:LSA", name: "Lille Saint-Sauveur", label: "LSA — Lille Saint-Sauveur", keys: ["LSA","LILLE SAINT SAUVEUR"] },
+      { id: "op:LE-RT", name: "Garages TER", label: "LE-RT — Garages TER", keys: ["LE RT","LERT","GARAGES TER"] },
+      { id: "stop_area:OCE87286005", name: "Lille Flandres", label: "LE — Lille Flandres", keys: ["LE","LILLE FLANDRES"] },
+      { id: "op:LNS-TR", name: "Lens Triage", label: "LNS-TR — Lens Triage", keys: ["LNS TR","LNS-TR","LENS TRIAGE"] },
+      { id: "op:LNS-DT", name: "Lens Dépôt", label: "LNS-DT — Lens Dépôt", keys: ["LNS DT","LNS-DT","LENS DEPOT"] },
+      { id: "op:LNS-DP", name: "Lens Dépôt", label: "LNS-DP — Lens Dépôt", keys: ["LNS DP","LNS-DP","LENS DEPOT"] }
+    ].filter(s => s.keys.some(k => norm(k) === nq || norm(k).startsWith(nq)));
+
+    // Operational chantier codes do not necessarily exist as SNCF stop_areas.
+    // Return them directly when the query is an exact operational abbreviation.
+    if (["LSA","LE RT","LERT","GARAGES TER","LNS TR","LNS DT","LNS DP"].includes(nq)) return res.json(operational);
+
     const data = await sncfGet("/places", {
       q,
       "type[]": "stop_area",
@@ -83,7 +98,7 @@ app.get("/api/stations", async (req, res) => {
       return res.json(fallback);
     }
 
-    res.json(places.slice(0, 10));
+    res.json([...operational, ...places].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i).slice(0, 10));
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }
@@ -93,6 +108,12 @@ app.get("/api/journeys", async (req, res) => {
   try {
     const { from, to, datetime, fromName, toName } = req.query;
     if (!from || !to) return res.status(400).json({ error: "Départ et arrivée obligatoires." });
+
+    // LSA / LE-RT are operational points used for technical/W movements.
+    // They are not guaranteed to be Navitia stop_area IDs.
+    if (String(from).startsWith("op:") || String(to).startsWith("op:")) {
+      return res.json([]);
+    }
 
     // Train journeys from SNCF API.
     const data = await sncfGet("/journeys", {
@@ -488,9 +509,32 @@ function normalizeTrainNumberTchoo(v) {
   return m ? m[1] : "";
 }
 
-function isWTrainNumber(v) {
+function isWTrainNumber(v, fromName = "", toName = "", fromRaw = "", toRaw = "") {
   const n = Number(normalizeTrainNumberTchoo(v));
-  return Number.isInteger(n) && n >= 700000 && n <= 799999;
+  if (!Number.isInteger(n)) return false;
+
+  const norm = x => String(x || "")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9]+/g, " ").trim();
+
+  const fromN = norm(fromName), toN = norm(toName);
+  const fromR = norm(fromRaw), toR = norm(toRaw);
+
+  const isLE = v => v === "LE" || v.startsWith("LE ") || v.includes("LILLE FLANDRES") || v === "LILLE";
+  const isLSA = v => v === "LSA" || v.startsWith("LSA ") || v.includes("LILLE SAINT SAUVEUR");
+  const isLERT = v => v === "LE RT" || v.startsWith("LE RT ") || v.includes("GARAGES TER");
+
+  if (n >= 700000 && n <= 799999) return true;
+
+  if (n >= 900000 && n <= 999999 &&
+      (((isLSA(fromR) || isLSA(fromN)) && (isLE(toR) || isLE(toN))) ||
+       ((isLSA(toR) || isLSA(toN)) && (isLE(fromR) || isLE(fromN))))) return true;
+
+  if (n >= 600000 && n <= 699999 &&
+      (((isLERT(fromR) || isLERT(fromN)) && (isLE(toR) || isLE(toN))) ||
+       ((isLERT(toR) || isLERT(toN)) && (isLE(fromR) || isLE(fromN))))) return true;
+
+  return false;
 }
 
 function normalizePlaceName(v) {
@@ -846,7 +890,13 @@ function buildWJourneys(rows, fromName, toName, referenceDateTime) {
   const from = String(fromName || "").trim();
 
   return rows
-    .filter(r => isWTrainNumber(r.trainNumber) && !r.bus)
+    .filter(r => isWTrainNumber(
+      r.trainNumber,
+      fromName,
+      toName,
+      r.origin || "",
+      r.destination || ""
+    ) && !r.bus)
     .map(r => {
       const steps = Array.isArray(r.steps) ? r.steps : [];
       let targetStep = steps.find(s => normalizePlaceName(s.name) === target);

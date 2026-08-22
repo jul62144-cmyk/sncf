@@ -15,6 +15,37 @@ function normalizeRosterTrainNumber(v){
   return m?m[1]:"";
 }
 
+function classifyTechnicalTrain(trainNo,fromName="",toName="",fromRaw="",toRaw=""){
+  const n=Number(normalizeRosterTrainNumber(trainNo));
+  if(!Number.isInteger(n))return null;
+
+  const norm=v=>String(v||"")
+    .normalize("NFD").replace(/[\u0300-\u036f]/g,"")
+    .toUpperCase().replace(/[^A-Z0-9]+/g," ").trim();
+
+  const fromN=norm(fromName), toN=norm(toName);
+  const fromR=norm(fromRaw), toR=norm(toRaw);
+
+  const isLE=v=>v==="LE"||v.startsWith("LE ")||v.includes("LILLE FLANDRES")||v==="LILLE";
+  const isLSA=v=>v==="LSA"||v.startsWith("LSA ")||v.includes("LILLE SAINT SAUVEUR");
+  const isLERT=v=>v==="LE RT"||v.startsWith("LE RT ")||v.includes("GARAGES TER");
+
+  if(n>=700000&&n<=799999)
+    return {label:"W / acheminement",rule:"700xxx"};
+
+  if(n>=900000&&n<=999999 &&
+     ((isLSA(fromR)||isLSA(fromN))&&(isLE(toR)||isLE(toN)) ||
+      (isLSA(toR)||isLSA(toN))&&(isLE(fromR)||isLE(fromN))))
+    return {label:"W / acheminement",rule:"900xxx LSA↔LE"};
+
+  if(n>=600000&&n<=699999 &&
+     ((isLERT(fromR)||isLERT(fromN))&&(isLE(toR)||isLE(toN)) ||
+      (isLERT(toR)||isLERT(toN))&&(isLE(fromR)||isLE(fromN))))
+    return {label:"W / acheminement",rule:"600xxx LE RT↔LE"};
+
+  return null;
+}
+
 function loadRosterIndex(){
   if(!rosterIndexPromise){
     rosterIndexPromise=fetch("/roster-index.json",{cache:"force-cache"}).then(r=>{
@@ -50,7 +81,9 @@ function rosterDateRuleApplies(r,dateStr){
   const d=new Date(`${dateStr}T12:00:00Z`);
   if(Number.isNaN(d.getTime()))return false;
 
-  if(dateStr<"2026-08-31"||dateStr>"2026-12-12")return false;
+  const setFrom=r.validFromSet||"2026-07-04";
+  const setTo=r.validToSet||"2026-12-12";
+  if(dateStr<setFrom||dateStr>setTo)return false;
 
   const dayCodes=["DI","LU","MA","ME","JE","VE","SA"];
   const day=dayCodes[d.getUTCDay()];
@@ -108,6 +141,8 @@ function rosterTaxiJourneys(payload,fromName,toName,dateStr,timeStr){
     rosterJS:r.js,
     rosterPage:r.page,
     rosterY:r.y,
+    rosterPagePath:r.pagePath||"",
+    rosterSetLabel:r.setLabel||"Roulement Orcades",
     departure:minuteToSncf(dateStr,r.departureMinute),
     arrival:minuteToSncf(dateStr,r.arrivalMinute),
     duration:Math.max(0,(r.arrivalMinute-r.departureMinute)*60),
@@ -132,8 +167,8 @@ function rosterTaxiJourneys(payload,fromName,toName,dateStr,timeStr){
   }));
 }
 
-function openRosterDirect(page,y,js){
-  rosterCurrentMatches=[{page:Number(page),y:Number(y),js:String(js||"")}];
+function openRosterDirect(page,y,js,pagePath){
+  rosterCurrentMatches=[{page:Number(page),y:Number(y),js:String(js||""),pagePath:String(pagePath||"")}];
   rosterCurrentMatch=0;
   $("roster-modal").classList.remove("hidden");
   $("roster-modal-title").textContent=`JS ${js}`;
@@ -165,7 +200,14 @@ async function openRosterForTrain(rawTrain){
       $("roster-next").disabled=true;
       return;
     }
-    $("roster-modal-subtitle").textContent=`${matches.length} correspondance(s) • roulement ${idx.validFrom} → ${idx.validTo}`;
+    const active=matches.filter(m=>{
+      const d=$("date")?.value||"";
+      return !d||(d>=String(m.validFrom||"")&&d<=String(m.validTo||""));
+    });
+    if(active.length){
+      rosterCurrentMatches=active;
+    }
+    $("roster-modal-subtitle").textContent=`${rosterCurrentMatches.length} correspondance(s) dans le roulement applicable`;
     renderRosterMatchTabs();
     showRosterMatch(0);
   }catch(e){
@@ -200,7 +242,7 @@ function showRosterMatch(i){
   img.onload=()=>requestAnimationFrame(()=>{
     viewport.scrollTop=Math.max(0,m.y*img.clientHeight-viewport.clientHeight/2);
   });
-  img.src=`/roster-pages/page-${String(m.page).padStart(2,"0")}.webp`;
+  img.src=m.pagePath||`/roster-pages/autumn/page-${String(m.page).padStart(2,"0")}.webp`;
   img.alt=`Roulement Orcades page ${m.page}, JS ${m.js}`;
 }
 
@@ -221,7 +263,12 @@ document.addEventListener("click",e=>{
   if(direct){
     e.preventDefault();
     e.stopPropagation();
-    openRosterDirect(direct.dataset.rosterDirectPage,direct.dataset.rosterDirectY,direct.dataset.rosterDirectJs);
+    openRosterDirect(
+      direct.dataset.rosterDirectPage,
+      direct.dataset.rosterDirectY,
+      direct.dataset.rosterDirectJs,
+      direct.dataset.rosterDirectPath
+    );
     return;
   }
 
@@ -252,6 +299,22 @@ function updateClock(){
 }
 updateClock();setInterval(updateClock,30000);
 
+const OPERATIONAL_STATIONS=[
+  {id:"op:LSA",name:"Lille Saint-Sauveur",label:"LSA — Lille Saint-Sauveur",abbr:"LSA"},
+  {id:"op:LE-RT",name:"Garages TER",label:"LE-RT — Garages TER",abbr:"LE-RT",aliases:["LE RT","LERT"]},
+  {id:"stop_area:OCE87286005",name:"Lille Flandres",label:"LE — Lille Flandres",abbr:"LE"},
+  {id:"op:LNS-TR",name:"Lens Triage",label:"LNS-TR — Lens Triage",abbr:"LNS-TR",aliases:["LNS TR"]},
+  {id:"op:LNS-DT",name:"Lens Dépôt",label:"LNS-DT — Lens Dépôt",abbr:"LNS-DT",aliases:["LNS DT"]},
+  {id:"op:LNS-DP",name:"Lens Dépôt",label:"LNS-DP — Lens Dépôt",abbr:"LNS-DP",aliases:["LNS DP"]}
+];
+function stationKey(v){
+  return String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase().replace(/[-_]+/g," ").replace(/\s+/g," ").trim();
+}
+function operationalStationMatches(q){
+  const k=stationKey(q);
+  return OPERATIONAL_STATIONS.filter(s=>[s.abbr,s.name,s.label,...(s.aliases||[])].map(stationKey).some(x=>x===k||x.startsWith(k)));
+}
+
 function setupAutocomplete(inputId,listId,onSelect){
   const input=$(inputId),list=$(listId);
   const run=debounce(async()=>{
@@ -259,7 +322,9 @@ function setupAutocomplete(inputId,listId,onSelect){
     try{
       const r=await fetch(`/api/stations?q=${encodeURIComponent(q)}`),data=await r.json();
       if(!r.ok)throw new Error(data.error||"Erreur");
-      list.innerHTML=data.map(s=>`<div class="suggestion" data-id="${s.id}" data-name="${escapeHtml(s.name)}">${escapeHtml(s.label)}</div>`).join("");
+      const local=operationalStationMatches(q);
+      const merged=[...local,...data].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i);
+      list.innerHTML=merged.map(s=>`<div class="suggestion" data-id="${s.id}" data-name="${escapeHtml(s.name)}">${escapeHtml(s.label)}</div>`).join("");
     }catch{list.innerHTML="";}
   });
   input.addEventListener("input",run);
@@ -474,7 +539,8 @@ $("search").addEventListener("click",async()=>{
     const extra=busCount===0&&br.headers.get("X-Bus-GTFS-Error")
       ?" • Cars temporairement indisponibles"
       :"";
-    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER • ${taxiCount} taxi(s) roulement${extra}`);
+    const taxiScope=(taxiPayload?.taxis||[]).filter(r=>rosterDateRuleApplies(r,$("date").value)).length;
+    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER • ${taxiCount} taxi(s) pour ce trajet${taxiScope?` (${taxiScope} taxi(s) actifs dans le roulement)`:""}${extra}`);
     renderJourneys(data);
   }catch(e){setStatus($("status"),e.message,true);}
 });
@@ -485,9 +551,12 @@ function renderJourneys(items){
     const details=sections.map(s=>{
       const d=s.display||{};
       const no=d.train_number||d.headsign||d.label||"";
+      const techClass=classifyTechnicalTrain(
+        no,s.from||"",s.to||"",s.from_raw||"",s.to_raw||""
+      );
       const name=j.transportType==="taxi"
         ? `Taxi roulement · JS ${escapeHtml(j.rosterJS||d.label||"")}`
-        : (j.isW||j.transportType==="w"
+        : ((j.isW||j.transportType==="w"||techClass)
           ? `W ${no}`
           : (j.transportType==="bus"?"Car TER":([d.commercial_mode,no].filter(Boolean).join(" "))));
       const depTrack=s.departure_platform
@@ -515,11 +584,14 @@ function renderJourneys(items){
         <div class="journey-actions">
           <div class="journey-badge">${j.transportType==="taxi"
             ?"🚕 Taxi roulement"
-            :(j.isW||j.transportType==="w"
+            :((j.isW||j.transportType==="w"||sections.some(s=>classifyTechnicalTrain(
+                s.display?.train_number||s.display?.headsign||s.display?.label,
+                s.from||"",s.to||"",s.from_raw||"",s.to_raw||""
+              )))
               ?(j.wFuture?"🚆 W prévu / acheminement":"🚆 W / acheminement")
               :(j.transportType==="bus"?"🚌 Car TER":"🚆 Train"))}</div>
           ${j.transportType==="taxi"
-            ?`<button type="button" class="roster-quick" data-roster-direct-page="${escapeHtml(j.rosterPage)}" data-roster-direct-y="${escapeHtml(j.rosterY)}" data-roster-direct-js="${escapeHtml(j.rosterJS)}">JS ${escapeHtml(j.rosterJS)} / Roulement</button>`
+            ?`<button type="button" class="roster-quick" data-roster-direct-page="${escapeHtml(j.rosterPage)}" data-roster-direct-y="${escapeHtml(j.rosterY)}" data-roster-direct-js="${escapeHtml(j.rosterJS)}" data-roster-direct-path="${escapeHtml(j.rosterPagePath||"")}">JS ${escapeHtml(j.rosterJS)} / Roulement</button>`
             :(journeyTrain?`<button type="button" class="roster-quick" data-roster-train="${escapeHtml(journeyTrain)}">JS / Roulement</button>`:"")}
         </div>
       </div>
