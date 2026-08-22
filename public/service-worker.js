@@ -1,4 +1,4 @@
-const CACHE = "trajets-hdf-v2.12.4-vercel";
+const CACHE = "trajets-hdf-v2.12.6-vercel";
 const ASSETS = [
   "/",
   "/index.html",
@@ -6,6 +6,8 @@ const ASSETS = [
   "/app.js",
   "/roster-index.json",
   "/roster-taxis.json",
+  "/station-abbreviations.json",
+  "/roster-technical-trains.json",
   "/manifest.webmanifest",
   "/icons/icon-192.png",
   "/icons/icon-512.png"

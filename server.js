@@ -5,6 +5,16 @@ const fs = require("fs");
 const AdmZip = require("adm-zip");
 const { Redis } = require("@upstash/redis");
 
+let STATION_ABBREVIATIONS = {};
+try {
+  STATION_ABBREVIATIONS = JSON.parse(
+    fs.readFileSync(path.join(__dirname, "public", "station-abbreviations.json"), "utf8")
+  );
+} catch (e) {
+  console.warn("Lexique gares indisponible:", e.message);
+}
+
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 const TOKEN = process.env.SNCF_API_TOKEN;
@@ -56,20 +66,87 @@ app.get("/api/stations", async (req, res) => {
     const q = String(req.query.q || "").trim();
     if (q.length < 2) return res.json([]);
 
-    const norm = v => String(v || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().replace(/[-_]+/g, " ").replace(/\s+/g, " ").trim();
+    const norm = v => String(v || "")
+      .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .toUpperCase()
+      .replace(/[-_]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
     const nq = norm(q);
-    const operational = [
-      { id: "op:LSA", name: "Lille Saint-Sauveur", label: "LSA — Lille Saint-Sauveur", keys: ["LSA","LILLE SAINT SAUVEUR"] },
+
+    const operationalAll = [
+      { id: "op:LSA", name: "Lille Saint-Sauveur", label: "LSA — Lille Saint-Sauveur", keys: ["LSA","LILLE SAINT SAUVEUR","LILLE ST SAUVEUR"] },
       { id: "op:LE-RT", name: "Garages TER", label: "LE-RT — Garages TER", keys: ["LE RT","LERT","GARAGES TER"] },
       { id: "stop_area:OCE87286005", name: "Lille Flandres", label: "LE — Lille Flandres", keys: ["LE","LILLE FLANDRES"] },
-      { id: "op:LNS-TR", name: "Lens Triage", label: "LNS-TR — Lens Triage", keys: ["LNS TR","LNS-TR","LENS TRIAGE"] },
-      { id: "op:LNS-DT", name: "Lens Dépôt", label: "LNS-DT — Lens Dépôt", keys: ["LNS DT","LNS-DT","LENS DEPOT"] },
-      { id: "op:LNS-DP", name: "Lens Dépôt", label: "LNS-DP — Lens Dépôt", keys: ["LNS DP","LNS-DP","LENS DEPOT"] }
-    ].filter(s => s.keys.some(k => norm(k) === nq || norm(k).startsWith(nq)));
+      { id: "op:LNS-TR", name: "Lens Triage", label: "LNS-TR — Lens Triage", keys: ["LNS TR","LENS TRIAGE"] },
+      { id: "op:LNS-DT", name: "Lens Dépôt", label: "LNS-DT — Lens Dépôt", keys: ["LNS DT","LENS DEPOT"] },
+      { id: "op:LNS-DP", name: "Lens Dépôt", label: "LNS-DP — Lens Dépôt", keys: ["LNS DP","LENS DEPOT"] }
+    ];
 
-    // Operational chantier codes do not necessarily exist as SNCF stop_areas.
-    // Return them directly when the query is an exact operational abbreviation.
-    if (["LSA","LE RT","LERT","GARAGES TER","LNS TR","LNS DT","LNS DP"].includes(nq)) return res.json(operational);
+    const operational = operationalAll.filter(s =>
+      s.keys.some(k => {
+        const nk = norm(k);
+        return nk === nq || nk.startsWith(nq);
+      })
+    );
+
+    const exactAbbr = Object.keys(STATION_ABBREVIATIONS)
+      .find(ab => norm(ab) === nq);
+
+    let abbreviationPlaces = [];
+
+    if (exactAbbr) {
+      const stationName = STATION_ABBREVIATIONS[exactAbbr];
+
+      try {
+        const adata = await sncfGet("/places", {
+          q: stationName,
+          "type[]": "stop_area",
+          count: 20
+        });
+
+        abbreviationPlaces = (adata.places || [])
+          .filter(p => p.embedded_type === "stop_area" && p.stop_area)
+          .filter(isHautsDeFrance)
+          .map(p => ({
+            id: p.stop_area.id,
+            name: p.stop_area.name,
+            label: exactAbbr === "LNS"
+              ? `LNS-BV — ${p.stop_area.name} (gare)`
+              : `${exactAbbr} — ${p.stop_area.name}`,
+            abbreviation: exactAbbr
+          }));
+
+        if (!abbreviationPlaces.length) {
+          abbreviationPlaces = (adata.places || [])
+            .filter(p => p.embedded_type === "stop_area" && p.stop_area)
+            .slice(0, 4)
+            .map(p => ({
+              id: p.stop_area.id,
+              name: p.stop_area.name,
+              label: exactAbbr === "LNS"
+                ? `LNS-BV — ${p.stop_area.name} (gare)`
+                : `${exactAbbr} — ${p.stop_area.name}`,
+              abbreviation: exactAbbr
+            }));
+        }
+      } catch (e) {
+        console.warn(`Résolution abréviation ${exactAbbr}:`, e.message);
+      }
+    }
+
+    const exactOperational = operationalAll.filter(s =>
+      s.keys.some(k => norm(k) === nq)
+    );
+
+    if (["LSA","LE RT","LERT","GARAGES TER","LNS TR","LNS DT","LNS DP"].includes(nq)) {
+      return res.json(
+        [...exactOperational, ...abbreviationPlaces]
+          .filter((s,i,a) => a.findIndex(x => x.id === s.id) === i)
+          .slice(0, 12)
+      );
+    }
 
     const data = await sncfGet("/places", {
       q,
@@ -86,19 +163,20 @@ app.get("/api/stations", async (req, res) => {
         label: p.stop_area.label || p.stop_area.name
       }));
 
-    if (!places.length) {
-      const fallback = (data.places || [])
-        .filter(p => p.embedded_type === "stop_area" && p.stop_area)
-        .slice(0, 8)
-        .map(p => ({
-          id: p.stop_area.id,
-          name: p.stop_area.name,
-          label: p.stop_area.label || p.stop_area.name
-        }));
-      return res.json(fallback);
-    }
+    const fallback = places.length ? [] : (data.places || [])
+      .filter(p => p.embedded_type === "stop_area" && p.stop_area)
+      .slice(0, 8)
+      .map(p => ({
+        id: p.stop_area.id,
+        name: p.stop_area.name,
+        label: p.stop_area.label || p.stop_area.name
+      }));
 
-    res.json([...operational, ...places].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i).slice(0, 10));
+    res.json(
+      [...operational, ...abbreviationPlaces, ...places, ...fallback]
+        .filter((s,i,a) => a.findIndex(x => x.id === s.id) === i)
+        .slice(0, 12)
+    );
   } catch (e) {
     res.status(e.status || 500).json({ error: e.message });
   }

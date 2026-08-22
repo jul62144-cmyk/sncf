@@ -76,6 +76,79 @@ function loadRosterTaxis(){
   return rosterTaxisPromise;
 }
 
+let rosterTechnicalPromise=null;
+
+function loadRosterTechnicalTrains(){
+  if(!rosterTechnicalPromise){
+    rosterTechnicalPromise=fetch("/roster-technical-trains.json",{cache:"force-cache"}).then(r=>{
+      if(!r.ok)throw new Error("Trains techniques du roulement indisponibles");
+      return r.json();
+    });
+  }
+  return rosterTechnicalPromise;
+}
+
+function operationalCodeFromStation(s){
+  const id=String(s?.id||"").toUpperCase();
+  const name=stationKey(s?.name||"");
+  if(id==="OP:LSA"||name.includes("LILLE SAINT SAUVEUR"))return "LSA";
+  if(id==="OP:LE-RT"||name.includes("GARAGES TER"))return "LE-RT";
+  if(id==="STOP_AREA:OCE87286005"||name.includes("LILLE FLANDRES"))return "LE";
+  return "";
+}
+
+function rosterTechnicalJourneys(payload,fromStation,toStation,dateStr,timeStr){
+  const fromCode=operationalCodeFromStation(fromStation);
+  const toCode=operationalCodeFromStation(toStation);
+  const wantedPair=new Set([fromCode,toCode]);
+  const [hh,mm]=String(timeStr||"00:00").split(":").map(Number);
+  const minStart=(Number.isFinite(hh)?hh:0)*60+(Number.isFinite(mm)?mm:0);
+
+  let route=null;
+  if(wantedPair.has("LSA")&&wantedPair.has("LE")&&wantedPair.size===2)route="LSA_LE";
+  if(wantedPair.has("LE-RT")&&wantedPair.has("LE")&&wantedPair.size===2)route="LERT_LE";
+  if(!route)return [];
+
+  return (payload?.technicalTrains||[])
+    .filter(r=>r.route===route)
+    .filter(r=>rosterDateRuleApplies(r,dateStr))
+    .filter(r=>Number(r.departureMinute)>=minStart)
+    .sort((a,b)=>a.departureMinute-b.departureMinute)
+    .slice(0,40)
+    .map(r=>({
+      source:"orcades-roster",
+      transportType:"w",
+      isW:true,
+      rosterTechnical:true,
+      rosterJS:r.js,
+      rosterPage:r.page,
+      rosterY:r.y,
+      rosterPagePath:r.pagePath||"",
+      rosterSetLabel:r.setLabel||"Roulement Orcades",
+      departure:minuteToSncf(dateStr,r.departureMinute),
+      arrival:minuteToSncf(dateStr,r.arrivalMinute),
+      duration:Math.max(0,(r.arrivalMinute-r.departureMinute)*60),
+      transfers:0,
+      status:null,
+      sections:[{
+        type:"public_transport",
+        mode:"train",
+        from:fromStation.name,
+        to:toStation.name,
+        departure:minuteToSncf(dateStr,r.departureMinute),
+        arrival:minuteToSncf(dateStr,r.arrivalMinute),
+        display:{
+          commercial_mode:"W",
+          network:"Roulement Orcades",
+          label:r.trainNumber,
+          direction:r.routeLabel,
+          headsign:r.trainNumber,
+          train_number:r.trainNumber
+        }
+      }]
+    }));
+}
+
 function rosterDateRuleApplies(r,dateStr){
   if(!dateStr)return false;
   const d=new Date(`${dateStr}T12:00:00Z`);
@@ -303,9 +376,11 @@ const OPERATIONAL_STATIONS=[
   {id:"op:LSA",name:"Lille Saint-Sauveur",label:"LSA — Lille Saint-Sauveur",abbr:"LSA"},
   {id:"op:LE-RT",name:"Garages TER",label:"LE-RT — Garages TER",abbr:"LE-RT",aliases:["LE RT","LERT"]},
   {id:"stop_area:OCE87286005",name:"Lille Flandres",label:"LE — Lille Flandres",abbr:"LE"},
+  {id:"abbr:LNS",name:"Lens",label:"LNS-BV — Lens (gare)",abbr:"LNS",aliases:["LNS BV","LNS-BV"]},
   {id:"op:LNS-TR",name:"Lens Triage",label:"LNS-TR — Lens Triage",abbr:"LNS-TR",aliases:["LNS TR"]},
   {id:"op:LNS-DT",name:"Lens Dépôt",label:"LNS-DT — Lens Dépôt",abbr:"LNS-DT",aliases:["LNS DT"]},
-  {id:"op:LNS-DP",name:"Lens Dépôt",label:"LNS-DP — Lens Dépôt",abbr:"LNS-DP",aliases:["LNS DP"]}
+  {id:"op:LNS-DP",name:"Lens Dépôt",label:"LNS-DP — Lens Dépôt",abbr:"LNS-DP",aliases:["LNS DP"]},
+  {id:"abbr:SPT",name:"Saint-Pol-sur-Ternoise",label:"SPT — Saint-Pol-sur-Ternoise",abbr:"SPT"}
 ];
 function stationKey(v){
   return String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase().replace(/[-_]+/g," ").replace(/\s+/g," ").trim();
@@ -323,7 +398,12 @@ function setupAutocomplete(inputId,listId,onSelect){
       const r=await fetch(`/api/stations?q=${encodeURIComponent(q)}`),data=await r.json();
       if(!r.ok)throw new Error(data.error||"Erreur");
       const local=operationalStationMatches(q);
-      const merged=[...local,...data].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i);
+      const localSafe=local.filter(s=>{
+        if(!String(s.id).startsWith("abbr:"))return true;
+        const ab=stationKey(s.abbr||"");
+        return !data.some(d=>stationKey(d.label||d.name).startsWith(ab));
+      });
+      const merged=[...data,...localSafe].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i);
       list.innerHTML=merged.map(s=>`<div class="suggestion" data-id="${s.id}" data-name="${escapeHtml(s.name)}">${escapeHtml(s.label)}</div>`).join("");
     }catch{list.innerHTML="";}
   });
@@ -517,10 +597,11 @@ $("search").addEventListener("click",async()=>{
       date:$("date").value,
       time:$("time").value
     });
-    const [tr,br,taxiPayload]=await Promise.all([
+    const [tr,br,taxiPayload,technicalPayload]=await Promise.all([
       fetch(`/api/journeys?${trainQs}`),
       fetch(`/api/bus-journeys?${busQs}`),
-      loadRosterTaxis().catch(()=>({taxis:[]}))
+      loadRosterTaxis().catch(()=>({taxis:[]})),
+      loadRosterTechnicalTrains().catch(()=>({technicalTrains:[]}))
     ]);
     const trains=await tr.json(),busPayload=await br.json();
     if(!tr.ok)throw new Error(trains.error||"Erreur SNCF");
@@ -532,15 +613,23 @@ $("search").addEventListener("click",async()=>{
       $("date").value,
       $("time").value
     );
-    const data=[...(Array.isArray(trains)?trains:[]),...buses,...rosterTaxis]
+    const rosterTechnical=rosterTechnicalJourneys(
+      technicalPayload,
+      state.from,
+      state.to,
+      $("date").value,
+      $("time").value
+    );
+    const data=[...(Array.isArray(trains)?trains:[]),...buses,...rosterTaxis,...rosterTechnical]
       .sort((a,b)=>(a.departure||"").localeCompare(b.departure||""));
     const busCount=buses.length;
     const taxiCount=rosterTaxis.length;
+    const technicalCount=rosterTechnical.length;
     const extra=busCount===0&&br.headers.get("X-Bus-GTFS-Error")
       ?" • Cars temporairement indisponibles"
       :"";
     const taxiScope=(taxiPayload?.taxis||[]).filter(r=>rosterDateRuleApplies(r,$("date").value)).length;
-    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER • ${taxiCount} taxi(s) pour ce trajet${taxiScope?` (${taxiScope} taxi(s) actifs dans le roulement)`:""}${extra}`);
+    setStatus($("status"),`${data.length} trajet(s) trouvé(s) • ${busCount} car(s) TER • ${taxiCount} taxi(s) • ${technicalCount} W roulement${taxiScope?` (${taxiScope} taxi(s) actifs)`:""}${extra}`);
     renderJourneys(data);
   }catch(e){setStatus($("status"),e.message,true);}
 });
@@ -590,7 +679,7 @@ function renderJourneys(items){
               )))
               ?(j.wFuture?"🚆 W prévu / acheminement":"🚆 W / acheminement")
               :(j.transportType==="bus"?"🚌 Car TER":"🚆 Train"))}</div>
-          ${j.transportType==="taxi"
+          ${(j.transportType==="taxi"||j.rosterTechnical)
             ?`<button type="button" class="roster-quick" data-roster-direct-page="${escapeHtml(j.rosterPage)}" data-roster-direct-y="${escapeHtml(j.rosterY)}" data-roster-direct-js="${escapeHtml(j.rosterJS)}" data-roster-direct-path="${escapeHtml(j.rosterPagePath||"")}">JS ${escapeHtml(j.rosterJS)} / Roulement</button>`
             :(journeyTrain?`<button type="button" class="roster-quick" data-roster-train="${escapeHtml(journeyTrain)}">JS / Roulement</button>`:"")}
         </div>
