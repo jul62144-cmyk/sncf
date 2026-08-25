@@ -1,4 +1,4 @@
-// v2.13.7 - robust Lille-Flandres board + W fallback
+// v2.13.8 - robust Lille-Flandres board + strict W 700000 classification
 // Applied after server.js is loaded. It replaces only /api/departures and /api/arrivals.
 
 const TCHOO = "https://api.tchoo.net";
@@ -13,13 +13,12 @@ function uicFromStopArea(v){const m=String(v||"").match(/(\d{8})/);return m?m[1]
 function trainNo(v){const m=String(v||"").match(/\b(\d{4,6})\b/);return m?m[1]:String(v||"").trim();}
 function combine(dateTime,clock){const d=dtDate(dateTime);const m=String(clock||"").match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);return d&&m?`${d}T${String(m[1]).padStart(2,"0")}${m[2]}${m[3]||"00"}`:dateTime||null;}
 function stepName(s){return String(s?.localite||s?.gare||s?.station||s?.name||s?.libelle||"").trim();}
+function isBoardW(n){const num=Number(n);return Number.isInteger(num)&&num>=700000&&num<=799999;}
 
 async function sncfBoard(stopArea,datetime,board){
   const uic=uicFromStopArea(stopArea);
   const candidates=[stopArea];
-  if(uic){
-    candidates.push(`stop_area:SNCF:${uic}`,`stop_area:OCE:${uic}`,`stop_area:OCE${uic}`);
-  }
+  if(uic) candidates.push(`stop_area:SNCF:${uic}`,`stop_area:OCE:${uic}`,`stop_area:OCE${uic}`);
   let lastErr=null;
   for(const id of [...new Set(candidates)]){
     try{
@@ -56,7 +55,7 @@ async function tchooBoard(stopArea,datetime,board){
   const uic=uicFromStopArea(stopArea);
   if(!uic)return [];
   try{
-    const r=await fetch(`${TCHOO}/api/carto.php?action=deparr&uic=${encodeURIComponent(uic)}`,{headers:{Accept:"application/json, text/plain, */*","User-Agent":"Trajets-HDF/2.13.7",Referer:"https://carto.tchoo.net/"}});
+    const r=await fetch(`${TCHOO}/api/carto.php?action=deparr&uic=${encodeURIComponent(uic)}`,{headers:{Accept:"application/json, text/plain, */*","User-Agent":"Trajets-HDF/2.13.8",Referer:"https://carto.tchoo.net/"}});
     if(!r.ok)return [];
     const data=await r.json();
     const src=board==="arrivals"?(data.arrivals||[]):(data.departures||[]);
@@ -66,8 +65,7 @@ async function tchooBoard(stopArea,datetime,board){
       const steps=Array.isArray(x.etapes)?x.etapes:[];
       const origin=String(x.origine_localite||x.gare_origine||stepName(steps[0])||"").trim();
       const destination=String(stepName(steps.at(-1))||x.destination||x.localite||"").trim();
-      const num=Number(n);
-      const isW=(num>=600000&&num<=999999);
+      const isW=isBoardW(n);
       return {
         type:board==="arrivals"?"arrival":"departure",source:"carto-tchoo",transportType:"train",
         datetime:combine(datetime,board==="arrivals"?(x.debut||x.fin):(x.fin||x.debut)),baseDatetime:null,
@@ -96,9 +94,11 @@ module.exports=function patchBoards(app){
         const {stopArea,datetime}=req.query;
         if(!stopArea)return res.status(400).json({error:"Gare obligatoire."});
         const [sncf,tchoo]=await Promise.all([sncfBoard(stopArea,datetime,board),tchooBoard(stopArea,datetime,board)]);
-        // Tchoo is also a safety net when SNCF cannot resolve Lille-Flandres.
-        // Merge both, keeping W 600/700/900xxx visible in station boards.
-        res.json(dedupe([...sncf,...tchoo]));
+        // Les W de tableau gare sont strictement les marches 700000-799999.
+        // Si SNCF répond, ses trains commerciaux font foi et Tchoo n'ajoute que les W.
+        // Si SNCF ne répond pas, Tchoo reste le filet de secours pour tout le tableau.
+        const merged=sncf.length?[...sncf,...tchoo.filter(r=>r.isW)]:tchoo;
+        res.json(dedupe(merged));
       }catch(e){res.status(500).json({error:e.message});}
     };
     layer.route.stack.forEach(s=>{s.handle=handler;});
