@@ -14,3 +14,5 @@ existants du dépôt, notamment `public/index.html`, au lieu d'ajouter un
 sous-dossier `trajet-sncf-hdf-v2.3/`.
 
 Le badge visible doit afficher `v2.13.3`.
+
+Redeploi force depuis le commit sain restaure.
