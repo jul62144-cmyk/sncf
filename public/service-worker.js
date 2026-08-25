@@ -4,6 +4,8 @@ const ASSETS = [
   "/index.html",
   "/style.css",
   "/app.js",
+  "/v2133-patch.js",
+  "/asct-compact.json",
   "/roster-index.json",
   "/roster-taxis.json",
   "/station-abbreviations.json",
@@ -32,7 +34,6 @@ self.addEventListener("activate", event => {
 self.addEventListener("fetch", event => {
   const url = new URL(event.request.url);
 
-  // Les appels API doivent rester réseau pour avoir des horaires à jour.
   if (url.pathname.startsWith("/api/")) return;
 
   event.respondWith(
