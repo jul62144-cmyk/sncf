@@ -1,4 +1,4 @@
-// v2.13.8 - robust Lille-Flandres board + strict W 700000 classification
+// v2.13.9 - robust Lille-Flandres board + strict W 700000 classification + correct LE/LSA direction
 // Applied after server.js is loaded. It replaces only /api/departures and /api/arrivals.
 
 const TCHOO = "https://api.tchoo.net";
@@ -14,6 +14,9 @@ function trainNo(v){const m=String(v||"").match(/\b(\d{4,6})\b/);return m?m[1]:S
 function combine(dateTime,clock){const d=dtDate(dateTime);const m=String(clock||"").match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?/);return d&&m?`${d}T${String(m[1]).padStart(2,"0")}${m[2]}${m[3]||"00"}`:dateTime||null;}
 function stepName(s){return String(s?.localite||s?.gare||s?.station||s?.name||s?.libelle||"").trim();}
 function isBoardW(n){const num=Number(n);return Number.isInteger(num)&&num>=700000&&num<=799999;}
+function normPlace(v){return String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toUpperCase().replace(/[^A-Z0-9]+/g," ").trim();}
+function isLilleFlandres(v){const n=normPlace(v);return n==="LE"||n==="LILLE FLANDRES"||n.includes("LILLE FLANDRES");}
+function isLSA(v){const n=normPlace(v);return n==="LSA"||n.includes("LILLE SAINT SAUVEUR")||n.includes("LILLE ST SAUVEUR")||n.includes("SAINT SAUVEUR");}
 
 async function sncfBoard(stopArea,datetime,board){
   const uic=uicFromStopArea(stopArea);
@@ -55,7 +58,7 @@ async function tchooBoard(stopArea,datetime,board){
   const uic=uicFromStopArea(stopArea);
   if(!uic)return [];
   try{
-    const r=await fetch(`${TCHOO}/api/carto.php?action=deparr&uic=${encodeURIComponent(uic)}`,{headers:{Accept:"application/json, text/plain, */*","User-Agent":"Trajets-HDF/2.13.8",Referer:"https://carto.tchoo.net/"}});
+    const r=await fetch(`${TCHOO}/api/carto.php?action=deparr&uic=${encodeURIComponent(uic)}`,{headers:{Accept:"application/json, text/plain, */*","User-Agent":"Trajets-HDF/2.13.9",Referer:"https://carto.tchoo.net/"}});
     if(!r.ok)return [];
     const data=await r.json();
     const src=board==="arrivals"?(data.arrivals||[]):(data.departures||[]);
@@ -63,9 +66,28 @@ async function tchooBoard(stopArea,datetime,board){
       const n=trainNo(x.num);
       if(!n)return null;
       const steps=Array.isArray(x.etapes)?x.etapes:[];
-      const origin=String(x.origine_localite||x.gare_origine||stepName(steps[0])||"").trim();
-      const destination=String(stepName(steps.at(-1))||x.destination||x.localite||"").trim();
+      let origin=String(x.origine_localite||x.gare_origine||stepName(steps[0])||"").trim();
+      let destination=String(stepName(steps.at(-1))||x.destination||x.localite||"").trim();
       const isW=isBoardW(n);
+
+      // Carto Tchoo can expose the endpoints in the reverse order for Lille-Flandres ↔ LSA.
+      // On the Lille-Flandres board, direction must be relative to the selected board:
+      // departures LE -> LSA, arrivals LSA -> LE.
+      if(isW && uic==="87286005"){
+        const candidates=[origin,destination,x.localite,x.origine_localite,x.gare_origine,x.destination,...steps.map(stepName)];
+        const hasLSA=candidates.some(isLSA);
+        const hasLE=candidates.some(isLilleFlandres) || true; // current board is Lille-Flandres
+        if(hasLSA && hasLE){
+          if(board==="departures"){
+            origin="Lille Flandres";
+            destination="Lille Saint-Sauveur";
+          }else{
+            origin="Lille Saint-Sauveur";
+            destination="Lille Flandres";
+          }
+        }
+      }
+
       return {
         type:board==="arrivals"?"arrival":"departure",source:"carto-tchoo",transportType:"train",
         datetime:combine(datetime,board==="arrivals"?(x.debut||x.fin):(x.fin||x.debut)),baseDatetime:null,
