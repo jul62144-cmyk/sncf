@@ -1,4 +1,4 @@
-// v2.14.1 - robust boards + strict W 700xxx + LE/LSA direction + platform restoration
+// v2.14.2 - robust boards + strict W 700xxx + correct origins/destinations + platforms
 // Applied after server.js is loaded. It replaces only /api/departures and /api/arrivals.
 
 const TCHOO = "https://api.tchoo.net";
@@ -19,7 +19,7 @@ function normPlace(v){return String(v||"").normalize("NFD").replace(/[\u0300-\u0
 function isLSA(v){const n=normPlace(v);return n==="LSA"||n.startsWith("LSA ")||n==="LILLE SA"||n.startsWith("LILLE SA ")||n.includes("LILLE SAINT SAUVEUR")||n.includes("LILLE ST SAUVEUR")||n.includes("SAINT SAUVEUR");}
 
 async function getJson(url,headers={}){
-  const r=await fetch(url,{headers:{Accept:"application/json, text/plain, */*","User-Agent":"Trajets-HDF/2.14.1",Referer:"https://carto.tchoo.net/",...headers}});
+  const r=await fetch(url,{headers:{Accept:"application/json, text/plain, */*","User-Agent":"Trajets-HDF/2.14.2",Referer:"https://carto.tchoo.net/",...headers}});
   if(!r.ok)throw new Error(`HTTP ${r.status}`);
   return r.json();
 }
@@ -39,8 +39,22 @@ async function sncfBoard(stopArea,datetime,board){
       const src=board==="arrivals"?(data.arrivals||[]):(data.departures||[]);
       return src.map(x=>{
         const info=x.display_informations||{},sdt=x.stop_date_time||{};
+        const stopName=x.stop_point?.name||"";
         const platform=x.stop_point?.platform_code||x.stop_point?.platform||x.stop_point?.codes?.find(c=>/platform|track|quai|voie/i.test(c.type||c.name||""))?.value||null;
-        return {type:board==="arrivals"?"arrival":"departure",source:"api-sncf",transportType:"train",datetime:board==="arrivals"?sdt.arrival_date_time:sdt.departure_date_time,baseDatetime:board==="arrivals"?sdt.base_arrival_date_time:sdt.base_departure_date_time,stop:x.stop_point?.name||"",origin:board==="arrivals"?(info.direction||""):"",direction:info.direction||"",headsign:info.headsign||"",label:info.label||"",trainNumber:trainNo(info.headsign||info.code||info.label),commercialMode:info.commercial_mode||"",network:info.network||"",status:sdt.data_freshness||null,platform:platform?String(platform):null,platformEstimated:false,platformConfidence:platform?100:null,platformSource:platform?"sncf-official":null};
+        // Navitia's display_informations.direction is the train's terminal direction,
+        // not its origin. For arrivals, do not copy it into origin: Tchoo will enrich it below.
+        return {
+          type:board==="arrivals"?"arrival":"departure",
+          source:"api-sncf",transportType:"train",
+          datetime:board==="arrivals"?sdt.arrival_date_time:sdt.departure_date_time,
+          baseDatetime:board==="arrivals"?sdt.base_arrival_date_time:sdt.base_departure_date_time,
+          stop:stopName,
+          origin:board==="departures"?stopName:"",
+          direction:info.direction||"",
+          headsign:info.headsign||"",label:info.label||"",
+          trainNumber:trainNo(info.headsign||info.code||info.label),commercialMode:info.commercial_mode||"",network:info.network||"",status:sdt.data_freshness||null,
+          platform:platform?String(platform):null,platformEstimated:false,platformConfidence:platform?100:null,platformSource:platform?"sncf-official":null
+        };
       });
     }catch(e){lastErr=e;}
   }
@@ -75,8 +89,6 @@ async function tchooBoard(stopArea,datetime,board){
       return {type:board==="arrivals"?"arrival":"departure",source:"carto-tchoo",transportType:"train",datetime:combine(datetime,board==="arrivals"?(x.debut||x.fin):(x.fin||x.debut)),baseDatetime:null,stop:"",origin,direction:destination,headsign:destination,label:n,trainNumber:n,commercialMode:isW?"W":"Train",network:isW?"Acheminement":"",status:null,platform,platformEstimated:false,platformConfidence:platform?100:null,platformSource:platform?"tchoo-official":null,isW};
     }).filter(Boolean);
 
-    // Si Carto ne publie pas encore de voie officielle, demander son estimation.
-    // Limitation de concurrence pour ne pas surcharger l'API.
     const missing=rows.filter(x=>!x.platform).slice(0,80);
     for(let i=0;i<missing.length;i+=8){
       const batch=missing.slice(i,i+8);
@@ -99,14 +111,31 @@ module.exports=function patchBoards(app){
         const {stopArea,datetime}=req.query;if(!stopArea)return res.status(400).json({error:"Gare obligatoire."});
         const [sncf,tchoo]=await Promise.all([sncfBoard(stopArea,datetime,board),tchooBoard(stopArea,datetime,board)]);
         const byTrain=new Map(tchoo.map(r=>[r.trainNumber,r]));
-        // SNCF reste la source du train commercial, mais on complète sa voie avec Carto Tchoo
-        // (officielle en priorité, sinon estimée) lorsqu'elle manque dans la réponse SNCF.
+
+        // SNCF remains authoritative for commercial service/times.
+        // Tchoo is used to restore real origin/destination and platform information.
         const enrichedSncf=sncf.map(r=>{
-          if(r.platform)return r;
-          const t=byTrain.get(r.trainNumber);if(!t?.platform)return r;
-          return {...r,platform:t.platform,platformEstimated:Boolean(t.platformEstimated),platformConfidence:t.platformConfidence||null,platformSource:t.platformSource||null,tchoo:true};
+          const t=byTrain.get(r.trainNumber);
+          const out={...r};
+          if(t){
+            if(t.origin)out.origin=t.origin;
+            if(t.direction)out.direction=t.direction;
+            if(!out.platform&&t.platform){
+              out.platform=t.platform;
+              out.platformEstimated=Boolean(t.platformEstimated);
+              out.platformConfidence=t.platformConfidence||null;
+              out.platformSource=t.platformSource||null;
+              out.tchoo=true;
+            }
+          }
+          // Never display the same terminal direction as both origin and destination.
+          if(board==="arrivals"&&normPlace(out.origin)&&normPlace(out.origin)===normPlace(out.direction))out.origin="";
+          return out;
         });
-        const merged=enrichedSncf.length?[...enrichedSncf,...tchoo.filter(r=>r.isW&&!enrichedSncf.some(s=>s.trainNumber===r.trainNumber&&s.datetime===r.datetime))]:tchoo;
+
+        const merged=enrichedSncf.length
+          ? [...enrichedSncf,...tchoo.filter(r=>r.isW&&!enrichedSncf.some(s=>s.trainNumber===r.trainNumber&&s.datetime===r.datetime))]
+          : tchoo;
         res.json(dedupe(merged));
       }catch(e){res.status(500).json({error:e.message});}
     };
