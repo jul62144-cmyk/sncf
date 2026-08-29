@@ -1,4 +1,4 @@
-// v2.14.5 - roster taxis on departure boards: dedupe + direct roster graph access
+// v2.14.6 - roster taxis on departure boards: dedupe + ADC-only roster graph access
 (function(){
   const norm=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
   const taxiKind=r=>String(r?.setId||"").toLowerCase()==="asct"?"ASCT":"ADC";
@@ -28,9 +28,19 @@
         datetime:minuteToSncf(dateStr,r.departureMinute),baseDatetime:minuteToSncf(dateStr,r.departureMinute),
         stop:r.originName||stationName,origin:r.originName||stationName,direction:r.destinationName||"",headsign:r.destinationName||"",
         label:`JS ${r.js||""}`.trim(),trainNumber:"",commercialMode:`Taxi ${taxiKind(r)}`,network:"Roulement",status:null,platform:null,
-        rosterTaxi:true,rosterJS:r.js||"",rosterPage:r.page,rosterY:r.y,rosterPagePath:r.pagePath||"",rosterSetLabel:r.setLabel||"",
+        rosterTaxi:true,rosterSetId:String(r.setId||""),rosterTaxiKind:taxiKind(r),rosterJS:r.js||"",rosterPage:r.page,rosterY:r.y,rosterPagePath:r.pagePath||"",rosterSetLabel:r.setLabel||"",
         arrival:minuteToSncf(dateStr,r.arrivalMinute)
       }));
+  }
+
+  // Disable direct graphical-roster access for ASCT taxis everywhere.
+  // ADC taxis keep the existing direct graphical viewer.
+  if(typeof openRosterDirect==="function"){
+    const openRosterDirectBeforeTaxiRule=openRosterDirect;
+    openRosterDirect=function(page,y,js,pagePath){
+      if(String(pagePath||"").includes("/roster-pages/asct/"))return;
+      return openRosterDirectBeforeTaxiRule(page,y,js,pagePath);
+    };
   }
 
   const filters=document.querySelector(".filters");
@@ -44,18 +54,21 @@
     originalRenderBoard();
     const c=document.getElementById("count-taxi");if(c)c.textContent=state.boardData.filter(x=>x.transportType==="taxi").length;
 
-    // The base board renderer does not know roster taxis. Replace their JS cell
-    // with a direct link to the same graphical roster viewer used elsewhere.
     const displayed=state.boardData.filter(x=>state.filter==="all"||x.transportType===state.filter);
     const rows=document.querySelectorAll("#board-results tr");
     rows.forEach((tr,i)=>{
       const item=displayed[i];if(!item?.rosterTaxi)return;
       const cell=tr.children?.[2];if(!cell)return;
       const js=String(item.rosterJS||"");
-      if(item.rosterPage){
-        cell.innerHTML=`<button type="button" class="train-number roster-train-link" data-roster-direct-page="${escapeHtml(String(item.rosterPage))}" data-roster-direct-y="${escapeHtml(String(item.rosterY??0))}" data-roster-direct-js="${escapeHtml(js)}" data-roster-direct-path="${escapeHtml(item.rosterPagePath||"")}" title="Voir le graphique du roulement">JS ${escapeHtml(js)}</button> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi")}</span>`;
+      const isAsct=String(item.rosterSetId||"").toLowerCase()==="asct" || String(item.rosterPagePath||"").includes("/roster-pages/asct/");
+      if(!isAsct&&item.rosterPage){
+        cell.innerHTML=`<button type="button" class="train-number roster-train-link" data-roster-direct-page="${escapeHtml(String(item.rosterPage))}" data-roster-direct-y="${escapeHtml(String(item.rosterY??0))}" data-roster-direct-js="${escapeHtml(js)}" data-roster-direct-path="${escapeHtml(item.rosterPagePath||"")}" title="Voir le graphique du roulement">JS ${escapeHtml(js)}</button> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi ADC")}</span>`;
         tr.classList.add("roster-click-row");
         tr.dataset.rosterDirectPage=String(item.rosterPage);tr.dataset.rosterDirectY=String(item.rosterY??0);tr.dataset.rosterDirectJs=js;tr.dataset.rosterDirectPath=item.rosterPagePath||"";
+      }else{
+        cell.innerHTML=`<span class="train-number">JS ${escapeHtml(js)}</span> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi ASCT")}</span>`;
+        tr.classList.remove("roster-click-row");
+        delete tr.dataset.rosterDirectPage;delete tr.dataset.rosterDirectY;delete tr.dataset.rosterDirectJs;delete tr.dataset.rosterDirectPath;
       }
     });
   };
