@@ -1,93 +1,30 @@
-// v2.14.6 - roster taxis on departure boards: dedupe + ADC-only roster graph access
+// v2.14.7 - roster taxis + ADC graph access + W board filter
 (function(){
   const norm=v=>String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().replace(/[^a-z0-9]+/g," ").trim();
   const taxiKind=r=>String(r?.setId||"").toLowerCase()==="asct"?"ASCT":"ADC";
-  const taxiKey=r=>[
-    String(r?.setId||""),String(r?.js||""),String(r?.page||""),
-    norm(r?.originName||r?.originRaw),norm(r?.destinationName||r?.destinationRaw),
-    String(r?.departureMinute||""),String(r?.arrivalMinute||""),
-    (r?.days||[]).slice().sort().join(",")
-  ].join("|");
-
-  function dedupeTaxis(rows){
-    const seen=new Set();
-    return (rows||[]).filter(r=>{const k=taxiKey(r);if(seen.has(k))return false;seen.add(k);return true;});
-  }
-
+  const taxiKey=r=>[String(r?.setId||""),String(r?.js||""),String(r?.page||""),norm(r?.originName||r?.originRaw),norm(r?.destinationName||r?.destinationRaw),String(r?.departureMinute||""),String(r?.arrivalMinute||""),(r?.days||[]).slice().sort().join(",")].join("|");
+  const isW=r=>r?.isW===true || (/^7\d{5}$/.test(String(r?.trainNumber||r?.label||"").trim()));
+  function dedupeTaxis(rows){const seen=new Set();return (rows||[]).filter(r=>{const k=taxiKey(r);if(seen.has(k))return false;seen.add(k);return true;});}
   function taxiBoardItems(payload,stationName,dateStr,timeStr){
-    const station=norm(stationName);
-    const [hh,mm]=String(timeStr||"00:00").split(":").map(Number);
-    const minStart=(Number.isFinite(hh)?hh:0)*60+(Number.isFinite(mm)?mm:0);
-    return dedupeTaxis(payload?.taxis||[])
-      .filter(r=>norm(r.originName)===station)
-      .filter(r=>rosterDateRuleApplies(r,dateStr))
-      .filter(r=>Number(r.departureMinute)>=minStart)
-      .sort((a,b)=>Number(a.departureMinute)-Number(b.departureMinute))
-      .map(r=>({
-        type:"departure",source:"roster-taxi",transportType:"taxi",
-        datetime:minuteToSncf(dateStr,r.departureMinute),baseDatetime:minuteToSncf(dateStr,r.departureMinute),
-        stop:r.originName||stationName,origin:r.originName||stationName,direction:r.destinationName||"",headsign:r.destinationName||"",
-        label:`JS ${r.js||""}`.trim(),trainNumber:"",commercialMode:`Taxi ${taxiKind(r)}`,network:"Roulement",status:null,platform:null,
-        rosterTaxi:true,rosterSetId:String(r.setId||""),rosterTaxiKind:taxiKind(r),rosterJS:r.js||"",rosterPage:r.page,rosterY:r.y,rosterPagePath:r.pagePath||"",rosterSetLabel:r.setLabel||"",
-        arrival:minuteToSncf(dateStr,r.arrivalMinute)
-      }));
+    const station=norm(stationName),[hh,mm]=String(timeStr||"00:00").split(":").map(Number),minStart=(Number.isFinite(hh)?hh:0)*60+(Number.isFinite(mm)?mm:0);
+    return dedupeTaxis(payload?.taxis||[]).filter(r=>norm(r.originName)===station).filter(r=>rosterDateRuleApplies(r,dateStr)).filter(r=>Number(r.departureMinute)>=minStart).sort((a,b)=>Number(a.departureMinute)-Number(b.departureMinute)).map(r=>({type:"departure",source:"roster-taxi",transportType:"taxi",datetime:minuteToSncf(dateStr,r.departureMinute),baseDatetime:minuteToSncf(dateStr,r.departureMinute),stop:r.originName||stationName,origin:r.originName||stationName,direction:r.destinationName||"",headsign:r.destinationName||"",label:`JS ${r.js||""}`.trim(),trainNumber:"",commercialMode:`Taxi ${taxiKind(r)}`,network:"Roulement",status:null,platform:null,rosterTaxi:true,rosterSetId:String(r.setId||""),rosterTaxiKind:taxiKind(r),rosterJS:r.js||"",rosterPage:r.page,rosterY:r.y,rosterPagePath:r.pagePath||"",rosterSetLabel:r.setLabel||"",arrival:minuteToSncf(dateStr,r.arrivalMinute)}));
   }
-
-  // Disable direct graphical-roster access for ASCT taxis everywhere.
-  // ADC taxis keep the existing direct graphical viewer.
-  if(typeof openRosterDirect==="function"){
-    const openRosterDirectBeforeTaxiRule=openRosterDirect;
-    openRosterDirect=function(page,y,js,pagePath){
-      if(String(pagePath||"").includes("/roster-pages/asct/"))return;
-      return openRosterDirectBeforeTaxiRule(page,y,js,pagePath);
-    };
-  }
-
+  if(typeof openRosterDirect==="function"){const before=openRosterDirect;openRosterDirect=function(page,y,js,pagePath){if(String(pagePath||"").includes("/roster-pages/asct/"))return;return before(page,y,js,pagePath);};}
   const filters=document.querySelector(".filters");
-  if(filters&&!document.querySelector('[data-filter="taxi"]')){
-    const b=document.createElement("button");b.className="filter";b.dataset.filter="taxi";b.innerHTML='Taxis <span id="count-taxi">0</span>';filters.appendChild(b);
-    b.addEventListener("click",()=>{document.querySelectorAll(".filter").forEach(x=>x.classList.remove("active"));b.classList.add("active");state.filter="taxi";renderBoard();});
-  }
-
+  function addFilter(type,label,countId){if(!filters||document.querySelector(`[data-filter="${type}"]`))return;const b=document.createElement("button");b.className="filter";b.dataset.filter=type;b.innerHTML=`${label} <span id="${countId}">0</span>`;filters.appendChild(b);b.addEventListener("click",()=>{document.querySelectorAll(".filter").forEach(x=>x.classList.remove("active"));b.classList.add("active");state.filter=type;renderBoard();});}
+  addFilter("w","W","count-w");addFilter("taxi","Taxis","count-taxi");
   const originalRenderBoard=renderBoard;
   renderBoard=function(){
-    originalRenderBoard();
-    const c=document.getElementById("count-taxi");if(c)c.textContent=state.boardData.filter(x=>x.transportType==="taxi").length;
-
-    const displayed=state.boardData.filter(x=>state.filter==="all"||x.transportType===state.filter);
+    // Temporarily map W filter to a data subset because base renderer only knows transportType filters.
+    const all=state.boardData,filter=state.filter;
+    if(filter==="w"){state.boardData=all.filter(isW);state.filter="all";originalRenderBoard();state.boardData=all;state.filter=filter;}
+    else originalRenderBoard();
+    const cw=document.getElementById("count-w");if(cw)cw.textContent=all.filter(isW).length;
+    const ct=document.getElementById("count-taxi");if(ct)ct.textContent=all.filter(x=>x.transportType==="taxi").length;
+    const displayed=filter==="w"?all.filter(isW):all.filter(x=>filter==="all"||x.transportType===filter);
     const rows=document.querySelectorAll("#board-results tr");
-    rows.forEach((tr,i)=>{
-      const item=displayed[i];if(!item?.rosterTaxi)return;
-      const cell=tr.children?.[2];if(!cell)return;
-      const js=String(item.rosterJS||"");
-      const isAsct=String(item.rosterSetId||"").toLowerCase()==="asct" || String(item.rosterPagePath||"").includes("/roster-pages/asct/");
-      if(!isAsct&&item.rosterPage){
-        cell.innerHTML=`<button type="button" class="train-number roster-train-link" data-roster-direct-page="${escapeHtml(String(item.rosterPage))}" data-roster-direct-y="${escapeHtml(String(item.rosterY??0))}" data-roster-direct-js="${escapeHtml(js)}" data-roster-direct-path="${escapeHtml(item.rosterPagePath||"")}" title="Voir le graphique du roulement">JS ${escapeHtml(js)}</button> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi ADC")}</span>`;
-        tr.classList.add("roster-click-row");
-        tr.dataset.rosterDirectPage=String(item.rosterPage);tr.dataset.rosterDirectY=String(item.rosterY??0);tr.dataset.rosterDirectJs=js;tr.dataset.rosterDirectPath=item.rosterPagePath||"";
-      }else{
-        cell.innerHTML=`<span class="train-number">JS ${escapeHtml(js)}</span> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi ASCT")}</span>`;
-        tr.classList.remove("roster-click-row");
-        delete tr.dataset.rosterDirectPage;delete tr.dataset.rosterDirectY;delete tr.dataset.rosterDirectJs;delete tr.dataset.rosterDirectPath;
-      }
-    });
+    rows.forEach((tr,i)=>{const item=displayed[i];if(!item?.rosterTaxi)return;const cell=tr.children?.[2];if(!cell)return;const js=String(item.rosterJS||"");const isAsct=String(item.rosterSetId||"").toLowerCase()==="asct"||String(item.rosterPagePath||"").includes("/roster-pages/asct/");if(!isAsct&&item.rosterPage){cell.innerHTML=`<button type="button" class="train-number roster-train-link" data-roster-direct-page="${escapeHtml(String(item.rosterPage))}" data-roster-direct-y="${escapeHtml(String(item.rosterY??0))}" data-roster-direct-js="${escapeHtml(js)}" data-roster-direct-path="${escapeHtml(item.rosterPagePath||"")}" title="Voir le graphique du roulement">JS ${escapeHtml(js)}</button> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi ADC")}</span>`;tr.classList.add("roster-click-row");tr.dataset.rosterDirectPage=String(item.rosterPage);tr.dataset.rosterDirectY=String(item.rosterY??0);tr.dataset.rosterDirectJs=js;tr.dataset.rosterDirectPath=item.rosterPagePath||"";}else{cell.innerHTML=`<span class="train-number">JS ${escapeHtml(js)}</span> <span class="mode-tag">${escapeHtml(item.commercialMode||"Taxi ASCT")}</span>`;tr.classList.remove("roster-click-row");delete tr.dataset.rosterDirectPage;delete tr.dataset.rosterDirectY;delete tr.dataset.rosterDirectJs;delete tr.dataset.rosterDirectPath;}});
   };
-
-  const patchedLoadBoard=async function(){
-    if(!state.boardStation){setStatus($("board-status"),"Choisis une gare dans les propositions.",true);return;}
-    setStatus($("board-status"),"Chargement…");$("board-results").innerHTML="";
-    $("board-subtitle").textContent=`${state.boardMode==="departures"?"Départs":"Arrivées"} – ${state.boardStation.name}`;
-    try{
-      const trainQs=new URLSearchParams({stopArea:state.boardStation.id,datetime:apiDatetime("board-date","board-time")});
-      const busQs=new URLSearchParams({stationName:state.boardStation.name,date:$("board-date").value,time:$("board-time").value,mode:state.boardMode});
-      const taxiPromise=state.boardMode==="departures"?loadRosterTaxis().catch(()=>({taxis:[]})):Promise.resolve({taxis:[]});
-      const [tr,busr,taxiPayload]=await Promise.all([fetch(`/api/${state.boardMode}?${trainQs}`),fetch(`/api/bus-board?${busQs}`),taxiPromise]);
-      const trains=await tr.json(),buses=await busr.json();if(!tr.ok)throw new Error(trains.error||"Erreur SNCF");
-      const taxis=state.boardMode==="departures"?taxiBoardItems(taxiPayload,state.boardStation.name,$("board-date").value,$("board-time").value):[];
-      state.boardData=[...(Array.isArray(trains)?trains:[]),...(Array.isArray(buses)?buses:[]),...taxis].sort((a,b)=>(a.datetime||"").localeCompare(b.datetime||""));
-      setStatus($("board-status"),`${state.boardData.length} circulation(s) affichée(s)${taxis.length?` • ${taxis.length} taxi(s)`:""}.`);renderBoard();
-    }catch(e){setStatus($("board-status"),e.message,true);}
-  };
-  loadBoard=patchedLoadBoard;
-  $("board-search-btn")?.addEventListener("click",e=>{e.preventDefault();e.stopImmediatePropagation();patchedLoadBoard();},true);
+  const patchedLoadBoard=async function(){if(!state.boardStation){setStatus($("board-status"),"Choisis une gare dans les propositions.",true);return;}setStatus($("board-status"),"Chargement…");$("board-results").innerHTML="";$("board-subtitle").textContent=`${state.boardMode==="departures"?"Départs":"Arrivées"} – ${state.boardStation.name}`;try{const trainQs=new URLSearchParams({stopArea:state.boardStation.id,datetime:apiDatetime("board-date","board-time")});const busQs=new URLSearchParams({stationName:state.boardStation.name,date:$("board-date").value,time:$("board-time").value,mode:state.boardMode});const taxiPromise=state.boardMode==="departures"?loadRosterTaxis().catch(()=>({taxis:[]})):Promise.resolve({taxis:[]});const [tr,busr,taxiPayload]=await Promise.all([fetch(`/api/${state.boardMode}?${trainQs}`),fetch(`/api/bus-board?${busQs}`),taxiPromise]);const trains=await tr.json(),buses=await busr.json();if(!tr.ok)throw new Error(trains.error||"Erreur SNCF");const taxis=state.boardMode==="departures"?taxiBoardItems(taxiPayload,state.boardStation.name,$("board-date").value,$("board-time").value):[];state.boardData=[...(Array.isArray(trains)?trains:[]),...(Array.isArray(buses)?buses:[]),...taxis].sort((a,b)=>(a.datetime||"").localeCompare(b.datetime||""));setStatus($("board-status"),`${state.boardData.length} circulation(s) affichée(s)${taxis.length?` • ${taxis.length} taxi(s)`:""}.`);renderBoard();}catch(e){setStatus($("board-status"),e.message,true);}};
+  loadBoard=patchedLoadBoard;$("board-search-btn")?.addEventListener("click",e=>{e.preventDefault();e.stopImmediatePropagation();patchedLoadBoard();},true);
 })();
