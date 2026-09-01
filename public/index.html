@@ -1,55 +1,8 @@
 <!doctype html>
-<html lang="fr">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#071a39">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-title" content="Trajets HDF">
-  <title>Trajets HDF</title>
-  <link rel="manifest" href="/manifest.webmanifest">
-  <link rel="apple-touch-icon" href="/icons/icon-192.png">
-  <link rel="stylesheet" href="/style.css">
-</head>
-<body>
-  <header class="topbar">
-    <div class="brand"><div class="brand-icon">🚆</div><div><div class="brand-title">Trajets HDF <span>v2.14.12</span></div><div class="brand-sub">Horaires & temps réel – Hauts-de-France</div></div></div>
-    <button id="refresh-board" class="refresh-btn">↻ Actualiser</button>
-  </header>
-  <div class="shell">
-    <aside class="sidebar">
-      <button class="nav-btn active" data-view="departures"><strong>🚆 Départs</strong><small>Trains et cars au départ</small></button>
-      <button class="nav-btn" data-view="arrivals"><strong>🚉 Arrivées</strong><small>Trains et cars à l’arrivée</small></button>
-      <button class="nav-btn" data-view="route"><strong>⌘ Itinéraire</strong><small>Rechercher un trajet</small></button>
-      <div class="side-card"><small>Ma gare</small><strong id="side-station">Aucune gare</strong></div>
-      <div class="side-card favorite-side-card"><small>★ Gares favorites</small><div id="board-favorites" class="sidebar-favorites"></div></div>
-      <div class="side-card"><small>Heure affichée</small><strong id="clock">--:--</strong><span id="clock-date"></span></div>
-      <div class="sources"><small>Sources :</small><div><span>SNCF Open Data</span><span>GTFS HDF</span><span>Historique persistant</span><span>Gares & Connexions</span></div></div>
-    </aside>
-    <main class="content">
-      <section id="board-view">
-        <div class="station-card"><div><h1 id="board-title">Départs</h1><p id="board-subtitle">Choisis une gare pour afficher les circulations.</p></div></div>
-        <section class="search-panel">
-          <div class="field autocomplete"><label for="board-station">Gare</label><div class="station-input-row"><input id="board-station" autocomplete="off" placeholder="Ex. Arras"><button id="fav-board" class="board-fav-btn" type="button" title="Ajouter cette gare aux favoris">☆</button></div><div id="board-station-list" class="suggestions"></div></div>
-          <div class="field"><label for="board-date">Date</label><input id="board-date" type="date"></div>
-          <div class="field"><label for="board-time">À partir de</label><input id="board-time" type="time"></div>
-          <button id="board-search-btn" class="primary">Afficher</button>
-        </section>
-        <div class="filters"><button class="filter active" data-filter="all">Tous <span id="count-all">0</span></button><button class="filter" data-filter="train">Trains <span id="count-train">0</span></button><button class="filter" data-filter="bus">Cars <span id="count-bus">0</span></button></div>
-        <p id="board-status" class="status"></p>
-        <div class="table-card"><div class="table-wrap"><table class="board-table"><thead><tr><th>Heure</th><th>Statut</th><th>N° de train / Ligne</th><th id="target-heading">Destination</th><th>Voie / Quai</th><th>Type</th><th id="other-heading">Origine</th></tr></thead><tbody id="board-results"></tbody></table></div><div class="legend"><span>ℹ Voie / Quai : SNCF Gares & Connexions (données publiques)</span><span>✓ voie active / confirmée</span></div></div>
-      </section>
-      <section id="route-view" class="hidden">
-        <div class="station-card"><div><h1>Itinéraire</h1><p>Trains et cars TER Hauts-de-France</p></div></div>
-        <section class="route-card">
-          <div class="field autocomplete"><label for="from">Départ</label><input id="from" autocomplete="off" placeholder="Ex. Arras"><button id="fav-from" class="fav-btn" type="button">☆</button><div id="from-list" class="suggestions"></div></div>
-          <button id="swap" class="swap">⇅</button>
-          <div class="field autocomplete"><label for="to">Arrivée</label><input id="to" autocomplete="off" placeholder="Ex. Lille Flandres"><button id="fav-to" class="fav-btn" type="button">☆</button><div id="to-list" class="suggestions"></div></div>
-          <div id="favorites" class="favorites"></div><div class="date-row"><div class="field"><label for="date">Date</label><input id="date" type="date"></div><div class="field"><label for="time">Heure de départ</label><input id="time" type="time"></div></div><button id="search" class="primary">Rechercher</button><p id="status" class="status"></p>
-        </section><section id="results" class="results"></section>
-      </section>
-    </main>
-  </div>
-  <div id="roster-modal" class="roster-modal hidden" role="dialog" aria-modal="true" aria-labelledby="roster-modal-title"><div class="roster-modal-card"><div class="roster-modal-head"><div><div class="roster-kicker">Roulement</div><h2 id="roster-modal-title">Train</h2><div id="roster-modal-subtitle" class="subtle"></div></div><button id="roster-modal-close" class="roster-close" type="button" aria-label="Fermer">×</button></div><div id="roster-match-tabs" class="roster-match-tabs"></div><div class="roster-viewer-toolbar"><button id="roster-prev" type="button">← Précédente</button><span id="roster-match-info"></span><button id="roster-next" type="button">Suivante →</button></div><div id="roster-page-viewport" class="roster-page-viewport"><div class="roster-page-inner"><img id="roster-page-image" alt="Graphique du roulement"><div id="roster-highlight" class="roster-highlight" aria-hidden="true"></div></div></div><div class="roster-modal-foot"><strong id="roster-js-label"></strong><span id="roster-page-label"></span><span>La ligne de la JS est surlignée sur le graphique.</span></div></div></div>
-  <script src="/app.js"></script><script src="/v2133-patch.js"></script><script src="/v2134-dedupe.js"></script><script src="/v2135-asct-viewer.js"></script><script src="/asct-original-29.js"></script><script src="/asct-original-30.js"></script><script src="/asct-original-35.js"></script><script src="/asct-original-40.js"></script><script src="/asct-original-41.js"></script><script src="/v2136-asct-original.js"></script><script src="/v2144-taxi-board.js"></script>
-</body></html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#071a39"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="Trajets HDF"><title>Trajets HDF</title><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/icons/icon-192.png"><link rel="stylesheet" href="/style.css"></head><body>
+<header class="topbar"><div class="brand"><div class="brand-icon">🚆</div><div><div class="brand-title">Trajets HDF <span>v2.14.13</span></div><div class="brand-sub">Horaires & temps réel – Hauts-de-France</div></div></div><button id="refresh-board" class="refresh-btn">↻ Actualiser</button></header>
+<div class="shell"><aside class="sidebar"><button class="nav-btn active" data-view="departures"><strong>🚆 Départs</strong><small>Trains et cars au départ</small></button><button class="nav-btn" data-view="arrivals"><strong>🚉 Arrivées</strong><small>Trains et cars à l’arrivée</small></button><button class="nav-btn" data-view="route"><strong>⌘ Itinéraire</strong><small>Rechercher un trajet</small></button><div class="side-card"><small>Ma gare</small><strong id="side-station">Aucune gare</strong></div><div class="side-card favorite-side-card"><small>★ Gares favorites</small><div id="board-favorites" class="sidebar-favorites"></div></div><div class="side-card"><small>Heure affichée</small><strong id="clock">--:--</strong><span id="clock-date"></span></div><div class="sources"><small>Sources :</small><div><span>SNCF Open Data</span><span>GTFS HDF</span><span>Historique persistant</span><span>Gares & Connexions</span></div></div></aside><main class="content">
+<section id="board-view"><div class="station-card"><div><h1 id="board-title">Départs</h1><p id="board-subtitle">Choisis une gare pour afficher les circulations.</p></div></div><section class="search-panel"><div class="field autocomplete"><label for="board-station">Gare</label><div class="station-input-row"><input id="board-station" autocomplete="off" placeholder="Ex. Arras"><button id="fav-board" class="board-fav-btn" type="button" title="Ajouter cette gare aux favoris">☆</button></div><div id="board-station-list" class="suggestions"></div></div><div class="field"><label for="board-date">Date</label><input id="board-date" type="date"></div><div class="field"><label for="board-time">À partir de</label><input id="board-time" type="time"></div><button id="board-search-btn" class="primary">Afficher</button></section><div class="filters"><button class="filter active" data-filter="all">Tous <span id="count-all">0</span></button><button class="filter" data-filter="train">Trains <span id="count-train">0</span></button><button class="filter" data-filter="bus">Cars <span id="count-bus">0</span></button></div><p id="board-status" class="status"></p><div class="table-card"><div class="table-wrap"><table class="board-table"><thead><tr><th>Heure</th><th>Statut</th><th>N° de train / Ligne</th><th id="target-heading">Destination</th><th>Voie / Quai</th><th>Type</th><th id="other-heading">Origine</th></tr></thead><tbody id="board-results"></tbody></table></div><div class="legend"><span>ℹ Voie / Quai : SNCF Gares & Connexions (données publiques)</span><span>✓ voie active / confirmée</span></div></div></section>
+<section id="route-view" class="hidden"><div class="station-card"><div><h1>Itinéraire</h1><p>Trains et cars TER Hauts-de-France</p></div></div><section class="route-card"><div class="field autocomplete"><label for="from">Départ</label><input id="from" autocomplete="off" placeholder="Ex. Arras"><button id="fav-from" class="fav-btn" type="button">☆</button><div id="from-list" class="suggestions"></div></div><button id="swap" class="swap">⇅</button><div class="field autocomplete"><label for="to">Arrivée</label><input id="to" autocomplete="off" placeholder="Ex. Lille Flandres"><button id="fav-to" class="fav-btn" type="button">☆</button><div id="to-list" class="suggestions"></div></div><div id="favorites" class="favorites"></div><div class="date-row"><div class="field"><label for="date">Date</label><input id="date" type="date"></div><div class="field"><label for="time">Heure de départ</label><input id="time" type="time"></div></div><button id="search" class="primary">Rechercher</button><p id="status" class="status"></p></section><section id="results" class="results"></section></section></main></div>
+<div id="roster-modal" class="roster-modal hidden" role="dialog" aria-modal="true" aria-labelledby="roster-modal-title"><div class="roster-modal-card"><div class="roster-modal-head"><div><div class="roster-kicker">Roulement</div><h2 id="roster-modal-title">Train</h2><div id="roster-modal-subtitle" class="subtle"></div></div><button id="roster-modal-close" class="roster-close" type="button" aria-label="Fermer">×</button></div><div id="roster-match-tabs" class="roster-match-tabs"></div><div class="roster-viewer-toolbar"><button id="roster-prev" type="button">← Précédente</button><span id="roster-match-info"></span><button id="roster-next" type="button">Suivante →</button></div><div id="roster-page-viewport" class="roster-page-viewport"><div class="roster-page-inner"><img id="roster-page-image" alt="Graphique du roulement"><div id="roster-highlight" class="roster-highlight" aria-hidden="true"></div></div></div><div class="roster-modal-foot"><strong id="roster-js-label"></strong><span id="roster-page-label"></span><span>La ligne de la JS est surlignée sur le graphique.</span></div></div></div>
+<script src="/app.js"></script><script src="/v2133-patch.js"></script><script src="/v2134-dedupe.js"></script><script src="/v2135-asct-viewer.js"></script><script src="/asct-original-29.js"></script><script src="/asct-original-30.js"></script><script src="/asct-original-35.js"></script><script src="/asct-original-40.js"></script><script src="/asct-original-41.js"></script><script src="/v2136-asct-original.js"></script><script src="/v2144-taxi-board.js"></script><script src="/v21413-evo-autumn.js"></script></body></html>
