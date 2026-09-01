@@ -1,13 +1,15 @@
-// v2.14.13 - EVO RLT ADC 31/08/2026 -> 12/12/2026
+// v2.14.14 - EVO RLT ADC 31/08/2026 -> 12/12/2026
 (function(){
-  const badge=document.querySelector('.brand-title span');if(badge)badge.textContent='v2.14.13';
+  const badge=document.querySelector('.brand-title span');if(badge)badge.textContent='v2.14.14';
   const base=typeof loadRosterTechnicalTrains==='function'?loadRosterTechnicalTrains:null;
   if(!base)return;
   let cache=null;
   const expand=row=>{
     const [trainNumber,js,page,y,departureMinute,arrivalMinute,days,validUntil,validFrom,exceptDates]=row;
     const even=Number(trainNumber)%2===0,six=String(trainNumber).startsWith('6');
-    const originCode=six?(even?'LE':'LE-RT'):(even?'LE':'LSA'),destinationCode=six?(even?'LE-RT':'LE'):(even?'LSA':'LE');
+    // Règle métier : numéro impair = vers LSA/LE-RT ; numéro pair = en provenance de LSA/LE-RT.
+    const originCode=six?(even?'LE-RT':'LE'):(even?'LSA':'LE');
+    const destinationCode=six?(even?'LE':'LE-RT'):(even?'LE':'LSA');
     return {trainNumber,js,page,y,pagePath:`/roster-pages/autumn/page-${String(page).padStart(2,'0')}.webp`,setId:'autumn',setLabel:'RLT ADC 31/08-12/12',validFromSet:'2026-08-31',validToSet:'2026-12-12',originCode,destinationCode,departureMinute,arrivalMinute,days,exceptDays:[],validUntil,validFrom,exceptDates:exceptDates||[],isRosterTechnical:true,isRosterEvo:true,timeEstimatedFromGraph:false};
   };
   async function autumn(){if(cache)return cache;const parts=await Promise.all([1,2,3,4].map(i=>fetch(`/roster-evo-autumn-${i}.json`,{cache:'no-store'}).then(r=>r.ok?r.json():{rows:[]}).catch(()=>({rows:[]}))));cache=parts.flatMap(p=>(p.rows||[]).map(expand));return cache;}
