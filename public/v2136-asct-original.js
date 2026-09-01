@@ -1,4 +1,4 @@
-/* Trajets HDF v2.14.10 — pages originales ASCT + périodes de roulement administrables. */
+/* Trajets HDF v2.14.12 — pages originales ASCT + périodes de roulement administrables. */
 (() => {
   const fallbackOpenRosterDirect = openRosterDirect;
 
@@ -22,7 +22,7 @@
 
   // Affiche la version réellement chargée sans devoir toucher au gabarit HTML.
   const badge=document.querySelector('.brand-title span');
-  if(badge) badge.textContent='v2.14.10';
+  if(badge) badge.textContent='v2.14.12';
 
   // Les périodes importées depuis /admin.html sont fusionnées avec les données intégrées.
   const periodCache=new Map();
