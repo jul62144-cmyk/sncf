@@ -1,0 +1,28 @@
+/* v2.14.22 - tableau départs/arrivées compact sur téléphone */
+@media(max-width:600px){
+  .table-card{overflow:visible;border:0;background:transparent;box-shadow:none}
+  .table-wrap{overflow:visible}
+  .board-table{display:block;width:100%;min-width:0;border-collapse:separate}
+  .board-table thead{display:none}
+  .board-table tbody{display:grid;gap:8px;width:100%}
+  .board-table tr{display:grid;grid-template-columns:58px minmax(0,1fr) auto;grid-template-rows:auto auto;column-gap:8px;row-gap:4px;width:100%;padding:9px 10px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 1px 4px rgba(20,40,70,.04)}
+  .board-table td{border:0!important;padding:0!important;min-width:0;font-size:12px;line-height:1.25}
+  /* ligne 1 : heure | destination | voie */
+  .board-table td:nth-child(1){grid-column:1;grid-row:1;font-size:16px;font-weight:900;align-self:center}
+  .board-table td:nth-child(4){grid-column:2;grid-row:1;align-self:center;overflow:hidden}
+  .board-table td:nth-child(4) .destination,.board-table td:nth-child(4){font-size:13px;font-weight:850;white-space:normal;overflow-wrap:anywhere}
+  .board-table td:nth-child(5){grid-column:3;grid-row:1;align-self:center;justify-self:end;white-space:nowrap}
+  /* ligne 2 : statut | n°/JS + type | origine */
+  .board-table td:nth-child(2){grid-column:1;grid-row:2;font-size:10px;align-self:center;overflow:hidden}
+  .board-table td:nth-child(3){grid-column:2;grid-row:2;align-self:center;white-space:normal;overflow:hidden}
+  .board-table td:nth-child(6){grid-column:2;grid-row:2;justify-self:end;align-self:center;margin-left:4px}
+  .board-table td:nth-child(7){grid-column:3;grid-row:2;align-self:center;justify-self:end;text-align:right;font-size:10px;color:#607086;max-width:82px;white-space:normal;overflow-wrap:anywhere}
+  .train-number{font-size:11px;padding:1px 4px}
+  .mode-tag{font-size:9px;margin-left:3px;padding:2px 4px}
+  .platform{min-width:25px;height:24px;padding:0 5px;font-size:11px}
+  .platform-label{display:none}
+  .track-ok{margin-left:3px;font-size:10px}
+  .legend{font-size:9px;padding:8px 10px}
+  .filters{gap:5px;overflow-x:auto;padding-bottom:2px}
+  .filter{padding:7px 9px;font-size:11px;white-space:nowrap}
+}
