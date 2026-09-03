@@ -1,0 +1,20 @@
+/* v2.14.16 - affichage RLT sans agrandissement destructif */
+.roster-page-inner{
+  width:max-content!important;
+  min-width:0!important;
+  margin:0 auto!important;
+}
+.roster-page-inner img{
+  display:block!important;
+  width:auto!important;
+  height:auto!important;
+  max-width:none!important;
+  image-rendering:auto!important;
+}
+/* Le graphique garde sa résolution native ; sur petit écran on fait défiler au lieu de l'étirer. */
+.roster-page-viewport{
+  overflow:auto!important;
+}
+@media(max-width:700px){
+  .roster-page-inner{min-width:0!important}
+}
