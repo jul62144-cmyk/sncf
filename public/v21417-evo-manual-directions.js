@@ -1,6 +1,6 @@
-// v2.14.17 - sens EVO confirmes manuellement depuis le graphique RLT
+// v2.14.18 - sens EVO confirmes manuellement depuis le graphique RLT
 (function(){
-  const badge=document.querySelector('.brand-title span');if(badge)badge.textContent='v2.14.17';
+  const badge=document.querySelector('.brand-title span');if(badge)badge.textContent='v2.14.18';
   const base=typeof loadRosterTechnicalTrains==='function'?loadRosterTechnicalTrains:null;
   if(!base)return;
 
@@ -11,7 +11,9 @@
     '642953':['LE-RT','LE'],
     '942251':['LSA','LE'],
     '642206':['LE','LE-RT'],
-    '643219':['LE','LE-RT']
+    '643219':['LE','LE-RT'],
+    '642936':['LE-RT','LE'],
+    '642932':['LE','LE-RT']
   };
 
   loadRosterTechnicalTrains=async function(){
