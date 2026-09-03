@@ -1,6 +1,6 @@
-const CACHE = "trajets-hdf-v2.14.21-vercel";
+const CACHE = "trajets-hdf-v2.14.22-vercel";
 const ASSETS = [
-  "/", "/index.html", "/style.css", "/v21416-sharp-rlt.css", "/app.js",
+  "/", "/index.html", "/style.css", "/v21416-sharp-rlt.css", "/v21422-mobile-board.css", "/app.js",
   "/v2133-patch.js", "/v2134-dedupe.js", "/v2135-asct-viewer.js",
   "/asct-original-29.js", "/asct-original-30.js", "/asct-original-34.js", "/asct-original-35.js", "/asct-original-40.js", "/asct-original-41.js", "/v2136-asct-original.js", "/v2144-taxi-board.js", "/v21413-evo-autumn.js", "/v21417-evo-manual-directions.js", "/v21421-chantiers.js",
   "/asct-compact.json", "/roster-index.json", "/roster-taxis.json", "/station-abbreviations.json", "/roster-technical-trains.json",
