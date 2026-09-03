@@ -1,11 +1,11 @@
-const CACHE = "trajets-hdf-v2.14.14-vercel";
+const CACHE = "trajets-hdf-v2.14.15-vercel";
 const ASSETS = [
   "/", "/index.html", "/style.css", "/app.js",
   "/v2133-patch.js", "/v2134-dedupe.js", "/v2135-asct-viewer.js",
   "/asct-original-29.js", "/asct-original-30.js", "/asct-original-34.js", "/asct-original-35.js", "/asct-original-40.js", "/asct-original-41.js", "/v2136-asct-original.js", "/v2144-taxi-board.js", "/v21413-evo-autumn.js",
   "/asct-compact.json", "/roster-index.json", "/roster-taxis.json", "/station-abbreviations.json", "/roster-technical-trains.json",
   "/roster-w-autumn-1.json", "/roster-w-autumn-2.json", "/roster-w-autumn-3.json", "/roster-w-autumn-4.json",
-  "/roster-evo-autumn-1.json", "/roster-evo-autumn-2.json", "/roster-evo-autumn-3.json", "/roster-evo-autumn-4.json",
+  "/roster-evo-autumn-1.json", "/roster-evo-autumn-2.json", "/roster-evo-autumn-3.json", "/roster-evo-autumn-4.json", "/roster-evo-autumn-directions.json",
   "/manifest.webmanifest", "/icons/icon-192.png", "/icons/icon-512.png"
 ];
 self.addEventListener("install", event => { event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(ASSETS))); self.skipWaiting(); });
