@@ -1,6 +1,6 @@
-// v2.14.15 - EVO RLT ADC 31/08/2026 -> 12/12/2026, sens lu sur le graphique
+// v2.14.16 - EVO RLT ADC 31/08/2026 -> 12/12/2026, sens lu sur le graphique
 (function(){
-  const badge=document.querySelector('.brand-title span');if(badge)badge.textContent='v2.14.15';
+  const badge=document.querySelector('.brand-title span');if(badge)badge.textContent='v2.14.16';
   const base=typeof loadRosterTechnicalTrains==='function'?loadRosterTechnicalTrains:null;
   if(!base)return;
   let cache=null;
