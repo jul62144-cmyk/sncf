@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"/>
+<meta name="theme-color" content="#ffffff"/>
+<title>English Quest</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="stylesheet" href="styles.css"/>
+</head>
+<body>
+<div class="app-shell">
+<header class="topbar">
+  <div><div class="eyebrow">ENGLISH QUEST</div><h1 id="pageTitle">Apprendre l’anglais</h1></div>
+  <div class="top-actions">
+    <div class="coin-card">💎 <strong id="gemValue">0</strong></div>
+    <div class="streak-card">🔥 <strong id="streakValue">0</strong></div>
+    <div class="level-badge" id="userLevel">A1</div>
+  </div>
+</header>
+<main id="app"></main>
+<nav class="bottom-nav">
+<button data-page="home" class="nav-btn active">🏠<span>Accueil</span></button>
+<button data-page="path" class="nav-btn">🗺️<span>Parcours</span></button>
+<button data-page="conversation" class="nav-btn">💬<span>Parler</span></button>
+<button data-page="rail" class="nav-btn">🚆<span>Ferro</span></button>
+</nav>
+</div>
+
+<template id="onboardingTpl">
+<section class="onboarding">
+  <div class="mascot-wrap">
+    <div class="mascot">🦉</div>
+    <div class="speech">Bienvenue ! Je vais t'aider à progresser en anglais.</div>
+  </div>
+  <div class="card">
+    <span class="pill">Première étape</span>
+    <h2>Quel est ton niveau ?</h2>
+    <p class="muted">Tu peux choisir directement ou faire un petit test.</p>
+    <div class="level-grid">
+      <button data-direct-level="A1">A1<br><small>Débutant</small></button>
+      <button data-direct-level="A2">A2<br><small>Élémentaire</small></button>
+      <button data-direct-level="B1">B1<br><small>Intermédiaire</small></button>
+      <button data-direct-level="B2">B2<br><small>Avancé</small></button>
+    </div>
+    <button id="startPlacement" class="primary full">🎯 Faire le test de niveau</button>
+  </div>
+</section>
+</template>
+
+<template id="placementTpl">
+<section class="lesson-head"><button class="icon-btn" id="closePlacement">✕</button><div class="lesson-progress"><div id="placementBar"></div></div><div class="heart">🎯</div></section>
+<section class="exercise-card card">
+  <div class="exercise-type">Test de niveau</div>
+  <h2 id="placementQuestion"></h2>
+  <div id="placementAnswers" class="answers"></div>
+  <button id="placementNext" class="primary full" disabled>Valider</button>
+</section>
+</template>
+
+<template id="homeTpl">
+<section class="mascot-banner card">
+  <div class="mascot small">🦉</div>
+  <div><strong id="mascotMessage">Prêt pour une nouvelle leçon ?</strong><p class="muted">Chaque petit progrès compte.</p></div>
+</section>
+<section class="hero card">
+<div><span class="pill">Objectif du jour</span><h2>50 XP aujourd’hui</h2><p id="dailyText">Commence une leçon pour lancer ta série.</p></div>
+<div class="progress-ring" id="dailyRing"><span id="dailyPct">0%</span></div>
+</section>
+<section class="stats-row">
+<div class="mini-card"><span>⭐</span><strong id="xpHome">0</strong><small>XP</small></div>
+<div class="mini-card"><span>✅</span><strong id="lessonHome">0</strong><small>Leçons</small></div>
+<div class="mini-card"><span>🎯</span><strong id="accuracyHome">0%</strong><small>Réussite</small></div>
+</section>
+<section class="card">
+<div class="section-title"><h2>Ton niveau</h2></div>
+<div class="level-selector">
+<button data-level="A1">A1</button><button data-level="A2">A2</button><button data-level="B1">B1</button><button data-level="B2">B2</button>
+</div>
+</section>
+<section><div class="section-title"><h2>Continuer</h2><button class="link-btn" data-page-link="path">Voir le parcours</button></div><div id="continueCourse"></div></section>
+<section class="card railway"><div class="railway-icon">🚆</div><div><span class="pill">Espace professionnel</span><h3>Anglais ferroviaire</h3><p>Vocabulaire, annonces, situations conducteur et dialogues.</p></div><button class="primary compact" data-page-link="rail">Ouvrir</button></section>
+<section class="card"><div class="section-title"><h2>Progression</h2><button class="link-btn" data-page-link="stats">Voir les statistiques</button></div><p class="muted">XP, séries, badges et progression par thème.</p></section>
+</template>
+
+<template id="pathTpl">
+<section class="path-header card">
+  <div><span class="pill">Carte de progression</span><h2>Ton parcours</h2><p class="muted">Termine une étape pour débloquer la suivante.</p></div>
+  <div class="path-trophy">🏆</div>
+</section>
+<section><div id="pathList" class="path-list"></div></section>
+</template>
+
+<template id="reviewTpl">
+<section class="card center"><div class="big-icon">🧠</div><h2>Révision intelligente</h2><p>Travaille en priorité les réponses ratées.</p><button id="startReview" class="primary">Lancer une révision</button></section>
+<section><div class="section-title"><h2>Mots à revoir</h2></div><div id="reviewWords" class="word-list"></div></section>
+</template>
+
+<template id="statsTpl">
+<section class="stats-grid">
+<div class="card stat-card"><span>⭐</span><strong id="xpStat">0</strong><small>XP totaux</small></div>
+<div class="card stat-card"><span>🔥</span><strong id="streakStat">0</strong><small>Série</small></div>
+<div class="card stat-card"><span>✅</span><strong id="lessonStat">0</strong><small>Leçons terminées</small></div>
+<div class="card stat-card"><span>🎯</span><strong id="accuracyStat">0%</strong><small>Réussite</small></div>
+</section>
+<section class="card"><h3>Progression par thème</h3><div id="courseProgress"></div></section>
+<section class="card"><h3>Récompenses</h3><div id="badges" class="badges"></div></section>
+<section class="card"><h3>Données</h3><button id="resetProgress" class="danger">Réinitialiser</button></section>
+</template>
+
+<template id="lessonTpl">
+<section class="lesson-head"><button class="icon-btn" id="closeLesson">✕</button><div class="lesson-progress"><div id="lessonBar"></div></div><div class="heart">❤️ <span id="lives">5</span></div></section>
+<section class="exercise-card card">
+<div class="exercise-type" id="exerciseType"></div><h2 id="questionText"></h2>
+<p id="hintText" class="muted"></p>
+<button id="speakBtn" class="speak-btn" hidden>🔊 Écouter</button>
+<button id="micBtn" class="mic-btn" hidden>🎙️ Parler</button>
+<div id="speechResult" class="speech-result" hidden></div>
+<div id="answerArea"></div><div id="feedback" class="feedback" hidden></div>
+<div id="rewardBurst" class="reward-burst" hidden>+10 XP ✨</div>
+<button id="checkBtn" class="primary full">Vérifier</button><button id="nextBtn" class="primary full" hidden>Continuer</button>
+</section>
+</template>
+
+<template id="conversationTpl">
+<section class="card conversation-intro">
+  <div class="mascot small">🦉</div>
+  <div><span class="pill">Conversation</span><h2>Parle en anglais</h2><p class="muted">Choisis une situation, réponds à voix haute ou par écrit, puis reçois une correction simple.</p></div>
+</section>
+<section class="card ai-teacher-card">
+  <div class="ai-teacher-icon">🤖</div>
+  <div>
+    <span class="pill">Nouveau</span>
+    <h2>Professeur IA</h2>
+    <p class="muted">Conversation libre, correction grammaticale et explication en français.</p>
+  </div>
+  <button id="openAiTeacher" class="primary compact">Ouvrir</button>
+</section>
+<section class="scenario-grid" id="scenarioGrid"></section>
+<section class="card chat-card" id="chatCard" hidden>
+  <div class="chat-head"><strong id="scenarioTitle"></strong><button class="icon-btn" id="resetChat">↻</button></div>
+  <div id="chatLog" class="chat-log"></div>
+  <div class="chat-actions">
+    <input id="chatInput" class="text-answer" placeholder="Écris ta réponse en anglais…">
+    <button id="chatMic" class="mic-btn">🎙️</button>
+  </div>
+  <button id="chatSend" class="primary full">Envoyer</button>
+</section>
+</template>
+
+<template id="railTpl">
+<section class="card rail-hero">
+  <div><span class="pill">Anglais ferroviaire</span><h2>Module professionnel 🚆</h2><p>Apprends le vocabulaire utile en exploitation ferroviaire et entraîne-toi sur des situations réelles.</p></div>
+</section>
+<section class="rail-grid">
+  <button class="rail-module" data-course="rail_vocab"><span>🚆</span><strong>Vocabulaire</strong><small>Voie, quai, signal, freinage…</small></button>
+  <button class="rail-module" data-course="rail_announcements"><span>📢</span><strong>Annonces</strong><small>Retards, départs, correspondances…</small></button>
+  <button class="rail-module" data-course="rail_driver"><span>🧑‍✈️</span><strong>Conducteur</strong><small>Signal, incident, assistance…</small></button>
+  <button class="rail-module" id="openRailDialogs"><span>🎧</span><strong>Dialogues</strong><small>Échanges conducteur / régulation</small></button>
+</section>
+<section id="railDialogs"></section>
+</template>
+
+<template id="aiTeacherTpl">
+<section class="card ai-chat-card">
+  <div class="chat-head">
+    <div>
+      <span class="pill">Professeur IA</span>
+      <h2 id="aiModeTitle">Conversation libre</h2>
+    </div>
+    <button class="icon-btn" id="closeAiTeacher">✕</button>
+  </div>
+
+  <div class="ai-mode-grid">
+    <button class="ai-mode active" data-ai-mode="general">💬 Général</button>
+    <button class="ai-mode" data-ai-mode="railway">🚆 Ferroviaire</button>
+  </div>
+
+  <div id="aiStatus" class="ai-status">Connexion au professeur IA…</div>
+  <div id="aiChatLog" class="chat-log ai-log"></div>
+
+  <div class="chat-actions">
+    <input id="aiInput" class="text-answer" placeholder="Écris en anglais…">
+    <button id="aiMic" class="mic-btn">🎙️</button>
+  </div>
+  <button id="aiSend" class="primary full">Envoyer</button>
+  <button id="aiExplainFr" class="secondary full">🇫🇷 Explique-moi en français</button>
+</section>
+</template>
+
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
