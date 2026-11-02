@@ -514,7 +514,7 @@ function renderBoard(){
       : (item.direction||item.headsign||"—");
     const mode=item.isW?(item.wFuture?"W prévu / acheminement":"W / acheminement"):(item.commercialMode||item.network||(isBus?"Car TER":"Train"));
     const platform=item.platform
-      ? `<span class="platform ${isBus?"bus":""} ${item.platformEstimated?"estimated":""}">${escapeHtml(item.platform)}</span>${item.tchoo?`<span class="platform-label">${item.platformSource==="persistent-history"?`historique ${Math.round(item.platformConfidence||0)}%${item.platformObservations?` · ${item.platformObservations}j`:""}`:(item.platformEstimated?`estimée ${Math.round(item.platformConfidence||0)}%`:"officielle")}</span>`:""}`
+      ? `<span class="platform ${isBus?"bus":""} ${item.platformEstimated?"estimated":""}">${escapeHtml(item.platform)}</span>${item.platformSource?`<span class="platform-label">${item.platformSource==="persistent-history"?`historique ${Math.round(item.platformConfidence||0)}%${item.platformObservations?` · ${item.platformObservations}j`:""}`:(item.platformEstimated?`estimée ${Math.round(item.platformConfidence||0)}%`:"officielle")}</span>`:""}`
       : `<span class="subtle">—</span>`;
     const rosterTrain=normalizeRosterTrainNumber(trainNo);
     return `<tr ${rosterTrain?`class="roster-click-row" data-roster-train="${escapeHtml(rosterTrain)}"`:""}>
