@@ -183,7 +183,7 @@ app.get("/api/stations", async (req, res) => {
     // Codes UIC vérifiés dans les données ouvertes SNCF.
     const localStations = [
       ["Arras","87342014"],
-      ["Douai","87345009"],
+      ["Douai","87345025"],
       ["Lille Flandres","87286005"],
       ["Amiens","87313874"],
       ["Dunkerque","87281006"]
