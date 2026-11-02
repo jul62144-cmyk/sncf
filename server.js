@@ -178,7 +178,24 @@ app.get("/api/stations", async (req, res) => {
         .slice(0, 12)
     );
   } catch (e) {
-    res.status(e.status || 500).json({ error: e.message });
+    // Fallback local pour garder l'autocomplétion disponible sans jeton SNCF.
+    // Les tableaux et itinéraires nécessitent toujours un jeton valide.
+    const localStations = [
+      ["Arras","87342014"],["Lens","87345009"],["Douai","87345025"],
+      ["Lille Flandres","87286005"],["Lille Europe","87286013"],
+      ["Béthune","87342055"],["Hazebrouck","87286203"],["Amiens","87313874"],
+      ["Calais Ville","87281063"],["Boulogne Ville","87317009"],
+      ["Valenciennes","87343005"],["Cambrai","87345504"],
+      ["Saint-Quentin","87296004"],["Abbeville","87317306"],
+      ["Dunkerque","87281006"]
+    ];
+    const normalize = v => String(v || "").normalize("NFD")
+      .replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+    const matches = localStations
+      .filter(([name]) => normalize(name).includes(normalize(q)))
+      .map(([name,uic]) => ({id:`stop_area:OCE${uic}`,name,label:name,localFallback:true}));
+    console.warn("Recherche locale des gares:", e.message);
+    return res.json(matches.slice(0,12));
   }
 });
 
