@@ -190,8 +190,9 @@ app.get("/api/stations", async (req, res) => {
     ];
     const normalize = v => String(v || "").normalize("NFD")
       .replace(/[\\u0300-\\u036f]/g, "").toLowerCase();
+    const query = String(req.query.q || "").trim();
     const matches = localStations
-      .filter(([name]) => normalize(name).includes(normalize(q)))
+      .filter(([name]) => normalize(name).includes(normalize(query)))
       .map(([name,uic]) => ({id:`stop_area:OCE${uic}`,name,label:name,localFallback:true}));
     console.warn("Recherche locale des gares:", e.message);
     return res.json(matches.slice(0,12));
