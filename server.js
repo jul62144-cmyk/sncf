@@ -180,13 +180,12 @@ app.get("/api/stations", async (req, res) => {
   } catch (e) {
     // Fallback local pour garder l'autocomplétion disponible sans jeton SNCF.
     // Les tableaux et itinéraires nécessitent toujours un jeton valide.
+    // Codes UIC vérifiés dans les données ouvertes SNCF.
     const localStations = [
-      ["Arras","87342014"],["Lens","87345009"],["Douai","87345025"],
-      ["Lille Flandres","87286005"],["Lille Europe","87286013"],
-      ["Béthune","87342055"],["Hazebrouck","87286203"],["Amiens","87313874"],
-      ["Calais Ville","87281063"],["Boulogne Ville","87317009"],
-      ["Valenciennes","87343005"],["Cambrai","87345504"],
-      ["Saint-Quentin","87296004"],["Abbeville","87317306"],
+      ["Arras","87342014"],
+      ["Douai","87345009"],
+      ["Lille Flandres","87286005"],
+      ["Amiens","87313874"],
       ["Dunkerque","87281006"]
     ];
     const normalize = v => String(v || "").normalize("NFD")
