@@ -972,11 +972,8 @@ app.get("/api/platform-history-status", async (req, res) => {
   res.json({
     ...history,
     vercel: Boolean(process.env.VERCEL),
-    cronRecommended: true,
-    cronPath: "/api/collect-platforms",
-    cronScheduleUTC: "0 16 * * *",
-    lastCollectionStats,
-    stations: AUTO_COLLECTION_STATIONS
+    collectionEnabled: false,
+    message: "La collecte automatique des voies n'est pas active. Seules les voies communiquées officiellement par la SNCF sont affichées."
   });
 });
 
