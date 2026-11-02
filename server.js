@@ -326,72 +326,8 @@ app.get("/api/journeys", async (req, res) => {
       }))
     }));
 
-    const tchooRequestCache = new Map();
-    const cachedTchoo = (stopArea, board) => {
-      if (!stopArea) return Promise.resolve([]);
-      const key = `${stopArea}|${board}`;
-      if (!tchooRequestCache.has(key)) {
-        tchooRequestCache.set(key, fetchTchooStation(stopArea, board).catch(() => []));
-      }
-      return tchooRequestCache.get(key);
-    };
-
-    for (const journey of journeys) {
-      for (const section of journey.sections) {
-        if (section.type !== "public_transport" || !section.display) continue;
-
-        const trainNumber = normalizeTrainNumberTchoo(
-          section.display.train_number ||
-          section.display.headsign ||
-          section.display.label
-        );
-
-        section.display.train_number = trainNumber || section.display.headsign || section.display.label || "";
-
-        // V2.9.5 : les anciens helpers Gares & Connexions avaient été retirés,
-        // mais l'endpoint /api/journeys les appelait encore, ce qui faisait
-        // échouer toute la recherche de trajets.
-        // On utilise désormais Carto Tchoo si possible, sans jamais bloquer
-        // le trajet si la voie n'est pas disponible.
-        if (journey.transportType !== "bus" && trainNumber) {
-          try {
-            const [depRows, arrRows] = await Promise.all([
-              cachedTchoo(section.from_id, "departures"),
-              cachedTchoo(section.to_id, "arrivals")
-            ]);
-
-            const dep = depRows.find(r => r.trainNumber === trainNumber);
-            const arr = arrRows.find(r => r.trainNumber === trainNumber);
-
-            section.departure_platform = dep?.platform || null;
-            section.departure_platform_active = Boolean(dep?.platform && !dep?.platformEstimated);
-            section.departure_platform_estimated = Boolean(dep?.platformEstimated);
-            section.departure_platform_confidence = dep?.platformConfidence || null;
-
-            section.arrival_platform = arr?.platform || null;
-            section.arrival_platform_active = Boolean(arr?.platform && !arr?.platformEstimated);
-            section.arrival_platform_estimated = Boolean(arr?.platformEstimated);
-            section.arrival_platform_confidence = arr?.platformConfidence || null;
-          } catch (trackError) {
-            console.warn("Voies trajet indisponibles:", trackError.message);
-            section.departure_platform = null;
-            section.arrival_platform = null;
-          }
-        }
-      }
-    }
-
-    let wJourneys = [];
-    if (fromName && toName) {
-      try {
-        const tchooRows = await fetchTchooStation(from, "departures");
-        wJourneys = buildWJourneys(tchooRows, fromName, toName, datetime);
-      } catch (e) {
-        console.warn("Trains W Tchoo indisponibles:", e.message);
-      }
-    }
-
-    const merged = [...journeys, ...wJourneys]
+    // SNCF uniquement : aucune dépendance à Carto Tchoo.
+    const merged = [...journeys]
       .sort((a,b) => String(a.departure || "").localeCompare(String(b.departure || "")));
 
     res.json(merged);
