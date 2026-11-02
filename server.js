@@ -605,6 +605,11 @@ let lastCollectionStats = null;
 // -----------------------
 // Données GTFS TER Hauts-de-France
 // -----------------------
+const GTFS_URL = "https://geocatalogue.hautsdefrance.fr/gtfs/HDF_TER_GTFS_J___90_jours.zip";
+let gtfsCache = null;
+let gtfsLoadedAt = 0;
+const GTFS_TTL = 6 * 60 * 60 * 1000;
+
 function parseCsv(text) {
   const rows = [];
   let row = [], cur = "", quoted = false;
