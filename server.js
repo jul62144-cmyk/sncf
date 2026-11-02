@@ -325,7 +325,6 @@ app.get("/api/journeys", async (req, res) => {
       }))
     }));
 
-    // SNCF uniquement : aucune dépendance à Carto Tchoo.
     const merged = [...journeys]
       .sort((a,b) => String(a.departure || "").localeCompare(String(b.departure || "")));
 
